@@ -57,9 +57,11 @@ scripts/youtube-monitor/run.sh --lookback-count 3 --workers 5 --force
 ```
 
 For clickable feedback, prefer `Review YouTube.command` or
-`python3 scripts/youtube-monitor/review_app.py`. The app infers the latest
-review date, starts a fresh local server on an available port, opens the
+`python3 scripts/youtube-monitor/review_app.py`. The app opens a dashboard of
+unreviewed dates, starts a fresh local server on an available port, opens the
 browser, and writes button clicks to `youtube-db/review/feedback.jsonl`.
+When the user submits a date review, record it in
+`youtube-db/review/reviewed_dates.json` and hide that date from the dashboard.
 Opening `youtube-db/review/YYYY-MM-DD.html` directly as `file://` is only a
 static preview. `--serve-review` remains available for automation/debugging.
 
@@ -115,6 +117,7 @@ For investing workflows, do not automatically write findings into `Stocks/`; kee
 
 - The monitor skips videos shorter than 3 minutes.
 - The monitor writes review state, review HTML, and feedback JSONL under `youtube-db/review/`.
+- The review dashboard should list unreviewed dates first; completed dates are hidden, not deleted.
 - Review cards should use the larger decision layout: summary judgment, highlighted opinion, key insights, key quotes, primary evidence, watchworthiness, and feedback actions; avoid fact-only cards for investment content.
 - The summary prompt should be opinionated while remaining transcript-grounded: state what the video changes, confirms, or fails to change for the decision lens.
 - The monitor reads `youtube-db/config/aliases.json` for generic matching and `Stocks/*/meta.json` only for optional investing alias matching.

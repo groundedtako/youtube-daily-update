@@ -30,7 +30,7 @@ def latest_review_date(db_dir: Path) -> str:
 
 def parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Launch the local YouTube review app.")
-    parser.add_argument("date", nargs="?", help="Review date. Defaults to the latest youtube-db/review/YYYY-MM-DD.json file.")
+    parser.add_argument("date", nargs="?", help="Optional review date. Omit to open the unreviewed-date dashboard.")
     parser.add_argument("--db-dir", type=Path, default=DEFAULT_DB_DIR)
     parser.add_argument("--host", default=monitor.DEFAULT_REVIEW_HOST)
     parser.add_argument("--port", type=int, default=DEFAULT_APP_PORT, help="Port to bind. Defaults to 0, which auto-selects a free port.")
@@ -40,8 +40,8 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
 
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv or sys.argv[1:])
-    run_date = args.date or latest_review_date(args.db_dir)
-    print(f"Review date: {run_date}")
+    run_date = args.date
+    print(f"Review date: {run_date or 'dashboard'}")
     print("Press Ctrl+C to stop.")
     monitor.serve_review(args.db_dir, run_date, args.host, args.port, open_browser=not args.no_open)
     return 0

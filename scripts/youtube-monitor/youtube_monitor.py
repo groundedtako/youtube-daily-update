@@ -25,7 +25,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from threading import Lock
 from typing import Any, Callable
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlparse
 
 import requests
 
@@ -1449,6 +1449,10 @@ def review_html_path(db_dir: Path, run_date: str) -> Path:
     return db_dir / "review" / f"{run_date}.html"
 
 
+def reviewed_dates_path(db_dir: Path) -> Path:
+    return db_dir / "review" / "reviewed_dates.json"
+
+
 def review_id(index: int) -> str:
     return f"W{index}"
 
@@ -1574,12 +1578,146 @@ def apply_feedback_text(db_dir: Path, run_date: str, text: str) -> int:
     return append_feedback_records(db_dir, run_date, parse_feedback_text(text))
 
 
+def review_dates(db_dir: Path) -> list[str]:
+    review_dir = db_dir / "review"
+    return sorted(
+        path.stem
+        for path in review_dir.glob("????-??-??.json")
+        if path.is_file()
+    )
+
+
+def load_reviewed_dates(db_dir: Path) -> set[str]:
+    path = reviewed_dates_path(db_dir)
+    if not path.exists():
+        return set()
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise MonitorError(f"Invalid reviewed dates JSON in {path}: {exc}") from exc
+    return {str(item) for item in data.get("reviewed_dates", [])}
+
+
+def mark_review_date_complete(db_dir: Path, run_date: str) -> None:
+    reviewed_dates = load_reviewed_dates(db_dir)
+    reviewed_dates.add(run_date)
+    write_json(
+        reviewed_dates_path(db_dir),
+        {
+            "updated_at": utc_now(),
+            "reviewed_dates": sorted(reviewed_dates),
+        },
+    )
+
+
+def feedback_counts_by_date(db_dir: Path) -> dict[str, int]:
+    path = feedback_path(db_dir)
+    feedback_ids: dict[str, set[str]] = {}
+    if not path.exists():
+        return {}
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        try:
+            record = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        run_date = str(record.get("run_date") or "")
+        review_id_value = str(record.get("review_id") or "")
+        if run_date and review_id_value:
+            feedback_ids.setdefault(run_date, set()).add(review_id_value)
+    return {run_date: len(ids) for run_date, ids in feedback_ids.items()}
+
+
+def unreviewed_date_summaries(db_dir: Path) -> list[dict[str, Any]]:
+    completed_dates = load_reviewed_dates(db_dir)
+    feedback_counts = feedback_counts_by_date(db_dir)
+    summaries: list[dict[str, Any]] = []
+    for run_date in reversed(review_dates(db_dir)):
+        if run_date in completed_dates:
+            continue
+        state = load_review_state(db_dir, run_date)
+        item_count = len(state.get("items", []))
+        summaries.append(
+            {
+                "run_date": run_date,
+                "item_count": item_count,
+                "feedback_count": min(feedback_counts.get(run_date, 0), item_count),
+                "generated_at": state.get("generated_at", ""),
+            }
+        )
+    return summaries
+
+
 class ReusableHTTPServer(HTTPServer):
     allow_reuse_address = True
 
 
-def render_review_html(run_date: str, items: list[dict[str, Any]], base_url: str | None = None) -> str:
+def render_review_dashboard_html(date_summaries: list[dict[str, Any]], base_url: str) -> str:
+    if date_summaries:
+        rows = "\n".join(
+            f"""
+<article class="date-card">
+  <div>
+    <h2>{html.escape(item['run_date'])}</h2>
+    <p>{html.escape(str(item['feedback_count']))}/{html.escape(str(item['item_count']))} items have feedback · generated {html.escape(str(item.get('generated_at') or 'unknown'))}</p>
+  </div>
+  <a class="open-date" href="/date/{html.escape(item['run_date'])}">Review date</a>
+</article>
+"""
+            for item in date_summaries
+        )
+    else:
+        rows = "<p class=\"empty\">No unreviewed dates. Completed dates are hidden from this list.</p>"
+    return f"""<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>YouTube Review Queue</title>
+  <style>
+    body {{ background: #111; color: #f4f4f4; font: 18px/1.55 -apple-system, BlinkMacSystemFont, sans-serif; margin: 0; padding: 32px; }}
+    main {{ max-width: 960px; margin: 0 auto; }}
+    .date-card {{ align-items: center; background: #1e1e1e; border: 1px solid #333; border-radius: 20px; display: flex; justify-content: space-between; margin: 18px 0; padding: 24px; gap: 24px; }}
+    h1 {{ margin-bottom: 4px; }}
+    h2 {{ margin: 0 0 4px; }}
+    p {{ color: #bbb; margin: 0; }}
+    a {{ color: #8ab4ff; }}
+    .open-date {{ background: #2a2a2a; border: 1px solid #444; border-radius: 999px; color: #fff; padding: 10px 14px; text-decoration: none; white-space: nowrap; }}
+    .empty {{ background: #1e1e1e; border: 1px solid #333; border-radius: 20px; padding: 24px; }}
+  </style>
+</head>
+<body>
+<main>
+  <h1>YouTube Review Queue</h1>
+  <p>Local app: {html.escape(base_url)}. Pick an unreviewed date; completed dates are hidden.</p>
+  {rows}
+</main>
+</body>
+</html>
+"""
+
+
+def render_review_html(
+    run_date: str,
+    items: list[dict[str, Any]],
+    base_url: str | None = None,
+    feedback_endpoint: str = "/feedback",
+    complete_endpoint: str | None = None,
+    dashboard_url: str | None = None,
+) -> str:
     app_url = base_url or f"http://{DEFAULT_REVIEW_HOST}:{DEFAULT_REVIEW_PORT}/"
+    completion_html = ""
+    if complete_endpoint:
+        completion_html = f"""
+  <section class="complete-review">
+    <h2>Done with {html.escape(run_date)}?</h2>
+    <p>Submit the date review to hide this date from the unreviewed dashboard. Individual button feedback is already saved as you click.</p>
+    <button id="complete-review" data-complete-endpoint="{html.escape(complete_endpoint)}">Submit date review</button>
+    <span id="complete-status"></span>
+  </section>
+"""
+    dashboard_link = f'<p><a href="{html.escape(dashboard_url)}">Back to unreviewed dates</a></p>' if dashboard_url else ""
     item_cards = []
     for item in items:
         entities = ", ".join(item.get("entities", [])) or "No entity detected"
@@ -1675,7 +1813,9 @@ def render_review_html(run_date: str, items: list[dict[str, Any]], base_url: str
   <p><strong>Persistence:</strong> buttons save only when this page is opened from the local review server at <code>{html.escape(app_url)}</code>. A <code>file://</code> tab is a static preview.</p>
   <p>Start the app with <code>scripts/youtube-monitor/run.sh --date {html.escape(run_date)} --serve-review</code>. Chat fallback works with commands like <code>W1 down indexing_saturated</code>.</p>
   <p><strong>Actions:</strong> <em>More/Less/Known</em> are ranking-preference signals for future briefs. <em>Promote</em> is an explicit workflow action: this deserves manual research follow-up, not merely more similar videos.</p>
+  {dashboard_link}
   {cards}
+  {completion_html}
 </main>
 <script>
 document.addEventListener("click", async (event) => {{
@@ -1683,7 +1823,7 @@ document.addEventListener("click", async (event) => {{
   if (!button) return;
   const card = button.closest(".card");
   const reason = card.querySelector("input").value.trim();
-  const response = await fetch("/feedback", {{
+  const response = await fetch("{feedback_endpoint}", {{
     method: "POST",
     headers: {{ "Content-Type": "application/json" }},
     body: JSON.stringify({{
@@ -1694,6 +1834,17 @@ document.addEventListener("click", async (event) => {{
   }});
   const status = card.querySelector(".status");
   status.textContent = response.ok ? "Saved" : await response.text();
+}});
+document.getElementById("complete-review")?.addEventListener("click", async (event) => {{
+  const endpoint = event.target.dataset.completeEndpoint;
+  const response = await fetch(endpoint, {{ method: "POST" }});
+  const status = document.getElementById("complete-status");
+  if (response.ok) {{
+    status.textContent = "Marked reviewed";
+    window.location.href = "{dashboard_url or '/'}";
+  }} else {{
+    status.textContent = await response.text();
+  }}
 }});
 </script>
 </body>
@@ -1708,49 +1859,80 @@ def write_review_html(db_dir: Path, run_date: str, items: list[dict[str, Any]]) 
     return path
 
 
-def make_review_handler(db_dir: Path, run_date: str, state: dict[str, Any], html_body: bytes) -> type[BaseHTTPRequestHandler]:
+def make_review_handler(db_dir: Path, fixed_run_date: str | None, base_url: str) -> type[BaseHTTPRequestHandler]:
     class ReviewHandler(BaseHTTPRequestHandler):
+        def send_bytes(self, status: int, body: bytes, content_type: str = "text/html; charset=utf-8") -> None:
+            self.send_response(status)
+            self.send_header("Content-Type", content_type)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def render_date_page(self, run_date: str) -> bytes:
+            state = load_review_state(db_dir, run_date)
+            return render_review_html(
+                run_date,
+                state.get("items", []),
+                base_url=base_url,
+                feedback_endpoint=f"/date/{run_date}/feedback",
+                complete_endpoint=f"/date/{run_date}/complete",
+                dashboard_url="/",
+            ).encode("utf-8")
+
         def do_GET(self) -> None:
-            if self.path in ("/", f"/{run_date}.html"):
-                self.send_response(200)
-                self.send_header("Content-Type", "text/html; charset=utf-8")
-                self.send_header("Content-Length", str(len(html_body)))
-                self.end_headers()
-                self.wfile.write(html_body)
+            parsed = urlparse(self.path)
+            path = parsed.path
+            if path == "/":
+                if fixed_run_date:
+                    self.send_bytes(200, self.render_date_page(fixed_run_date))
+                else:
+                    body = render_review_dashboard_html(unreviewed_date_summaries(db_dir), base_url).encode("utf-8")
+                    self.send_bytes(200, body)
                 return
-            if self.path == "/review-state":
+            date_match = re.fullmatch(r"/date/(\d{4}-\d{2}-\d{2})", path)
+            if date_match:
+                self.send_bytes(200, self.render_date_page(date_match.group(1)))
+                return
+            state_match = re.fullmatch(r"/date/(\d{4}-\d{2}-\d{2})/state", path)
+            if state_match:
+                state = load_review_state(db_dir, state_match.group(1))
                 payload = json.dumps(state, indent=2).encode("utf-8")
-                self.send_response(200)
-                self.send_header("Content-Type", "application/json; charset=utf-8")
-                self.send_header("Content-Length", str(len(payload)))
-                self.end_headers()
-                self.wfile.write(payload)
+                self.send_bytes(200, payload, "application/json; charset=utf-8")
                 return
             self.send_error(404)
 
         def do_POST(self) -> None:
-            if self.path != "/feedback":
-                self.send_error(404)
-                return
+            parsed = urlparse(self.path)
+            path = parsed.path
+            feedback_match = re.fullmatch(r"/date/(\d{4}-\d{2}-\d{2})/feedback", path)
+            complete_match = re.fullmatch(r"/date/(\d{4}-\d{2}-\d{2})/complete", path)
             try:
-                length = int(self.headers.get("Content-Length", "0"))
-                payload = json.loads(self.rfile.read(length).decode("utf-8"))
-                record = {
-                    "review_id": str(payload.get("review_id", "")).upper(),
-                    "action": str(payload.get("action", "")).casefold(),
-                    "reason_codes": [str(item) for item in payload.get("reason_codes", [])],
-                    "raw_text": "review-ui",
-                }
-                if record["action"] not in FEEDBACK_ACTIONS or not re.fullmatch(r"W\d+", record["review_id"]):
-                    raise MonitorError("Invalid feedback payload.")
-                append_feedback_records(db_dir, run_date, [record])
+                if feedback_match:
+                    length = int(self.headers.get("Content-Length", "0"))
+                    payload = json.loads(self.rfile.read(length).decode("utf-8"))
+                    record = {
+                        "review_id": str(payload.get("review_id", "")).upper(),
+                        "action": str(payload.get("action", "")).casefold(),
+                        "reason_codes": [str(item) for item in payload.get("reason_codes", [])],
+                        "raw_text": "review-ui",
+                    }
+                    if record["action"] not in FEEDBACK_ACTIONS or not re.fullmatch(r"W\d+", record["review_id"]):
+                        raise MonitorError("Invalid feedback payload.")
+                    append_feedback_records(db_dir, feedback_match.group(1), [record])
+                    self.send_response(204)
+                    self.end_headers()
+                    return
+                if complete_match:
+                    mark_review_date_complete(db_dir, complete_match.group(1))
+                    self.send_response(204)
+                    self.end_headers()
+                    return
             except Exception as exc:
                 self.send_response(400)
                 self.end_headers()
                 self.wfile.write(str(exc).encode("utf-8"))
                 return
-            self.send_response(204)
-            self.end_headers()
+            self.send_error(404)
 
         def log_message(self, format: str, *args: Any) -> None:
             log_progress(format % args)
@@ -1758,16 +1940,15 @@ def make_review_handler(db_dir: Path, run_date: str, state: dict[str, Any], html
     return ReviewHandler
 
 
-def serve_review(db_dir: Path, run_date: str, host: str, port: int, open_browser: bool = False) -> None:
-    state = load_review_state(db_dir, run_date)
+def serve_review(db_dir: Path, run_date: str | None, host: str, port: int, open_browser: bool = False) -> None:
     server = ReusableHTTPServer((host, port), BaseHTTPRequestHandler)
     actual_host, actual_port = server.server_address
-    url = f"http://{actual_host}:{actual_port}/"
-    html_body = render_review_html(run_date, state.get("items", []), base_url=url).encode("utf-8")
-    server.RequestHandlerClass = make_review_handler(db_dir, run_date, state, html_body)
-    log_progress(f"review server {url}")
+    base_url = f"http://{actual_host}:{actual_port}/"
+    open_url = f"{base_url}date/{run_date}" if run_date else base_url
+    server.RequestHandlerClass = make_review_handler(db_dir, run_date, base_url)
+    log_progress(f"review server {open_url}")
     if open_browser:
-        webbrowser.open(url)
+        webbrowser.open(open_url)
     server.serve_forever()
 
 
@@ -1798,7 +1979,7 @@ def write_daily_report(
         f"- Videos skipped: {len(skipped)}",
         f"- Videos failed: {len(failures)}",
         f"- Source-backed quote candidates: {sum(len(item['insights']) for item in processed_results)}",
-        f"- Review app: double-click `Review YouTube.command` or run `python3 scripts/youtube-monitor/review_app.py {run_date}`; it starts a fresh local server and opens the browser.",
+        f"- Review app: double-click `Review YouTube.command` or run `python3 scripts/youtube-monitor/review_app.py`; it opens the unreviewed-date dashboard. For this date only: `python3 scripts/youtube-monitor/review_app.py {run_date}`.",
         f"- CLI fallback: `scripts/youtube-monitor/run.sh --date {run_date} --feedback \"W1 up; W2 down <reason>\"`",
         f"- Static review preview: `{html_path.relative_to(db_dir)}`",
         f"- Review state: `{state_path.relative_to(db_dir)}`",

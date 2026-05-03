@@ -341,7 +341,7 @@ Medium — useful if this is not already in your base rate.
             daily = daily_path.read_text(encoding="utf-8")
             self.assertIn("**W1**", daily)
             self.assertIn("Review app: double-click `Review YouTube.command`", daily)
-            self.assertIn("starts a fresh local server", daily)
+            self.assertIn("unreviewed-date dashboard", daily)
             self.assertIn("python3 scripts/youtube-monitor/review_app.py 2026-05-02", daily)
             self.assertIn("`W1 up | W1 down <reason> | W1 known | W1 promote`", daily)
             state = json.loads((db_dir / "review" / "2026-05-02.json").read_text(encoding="utf-8"))
@@ -392,6 +392,28 @@ Medium — useful if this is not already in your base rate.
             ym.write_json(db_dir / "review" / "2026-05-03.json", {"items": []})
 
             self.assertEqual(review_app.latest_review_date(db_dir), "2026-05-03")
+
+    def test_unreviewed_date_summaries_hide_completed_dates(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            db_dir = Path(tmp)
+            ym.write_json(db_dir / "review" / "2026-05-01.json", {"items": [{"review_id": "W1"}]})
+            ym.write_json(db_dir / "review" / "2026-05-02.json", {"items": [{"review_id": "W1"}, {"review_id": "W2"}]})
+            ym.mark_review_date_complete(db_dir, "2026-05-01")
+
+            summaries = ym.unreviewed_date_summaries(db_dir)
+
+            self.assertEqual([item["run_date"] for item in summaries], ["2026-05-02"])
+            self.assertEqual(summaries[0]["item_count"], 2)
+
+    def test_review_dashboard_lists_unreviewed_dates(self) -> None:
+        html = ym.render_review_dashboard_html(
+            [{"run_date": "2026-05-02", "item_count": 2, "feedback_count": 1, "generated_at": "now"}],
+            "http://127.0.0.1:12345/",
+        )
+
+        self.assertIn("YouTube Review Queue", html)
+        self.assertIn("/date/2026-05-02", html)
+        self.assertIn("1/2 items have feedback", html)
 
 
 if __name__ == "__main__":
