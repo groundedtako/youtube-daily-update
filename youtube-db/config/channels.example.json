@@ -1,54 +1,12 @@
 {
   "channels": [
-    "@DrewCohenMoney",
-    "@Griffonomics",
-    "@PredictiveHistory",
-    "@veritasium",
-    "@xiao_lin_shuo",
-    "@mkbhd",
-    "@TheCompoundNews",
-    "@DwarkeshPatel",
-    "@MoneyXYZ",
-    "@DumbMoneyLive",
-    "@StockSpotlightPodcast",
-    "@marketdisruptorspodcast",
-    "@TheIntrinsicValuePodcast",
-    "@CiovaccoCapital",
-    "@tangshanlaowang",
-    "@t3dotgg",
-    "@chipstockinvestor",
-    "@20VC",
-    "@a16z",
-    "@unitreerobotics",
-    "@InvestingMoatswithVarun",
-    "@nicksaraev",
-    "@PBoyle",
-    "@CNBC",
-    "@CNBCtelevision",
-    "@LearntoInvest",
-    "@tfolsenuclear",
-    "@basispointpodcast",
-    "@SemiAnalysis",
-    "@lexfridman",
-    "@60minutes",
-    "@TuckerCarlson",
-    "@TheDiaryOfACEO",
-    "@joerogan",
-    "@ILTB_Podcast"
+    "@ExampleChannel",
+    {
+      "handle": "@AnotherExampleChannel",
+      "label": "Another Example Channel"
+    }
   ],
   "blacklist_channels": [
-    "@wangzhian",
-    "@rainboltshorts",
-    "@redbull",
-    "@tommiebennett",
-    "@isaacholmesguitar",
-    "@ePianoh",
-    "@RedBullSnow",
-    "@Tech.explain1",
-    "@DanielLaBelle",
-    "@OutdoorBoys",
-    "@jjohannes",
-    "@bbcnewschinese",
-    "@AsianDadEnergy"
+    "@ChannelToSkip"
   ]
 }
