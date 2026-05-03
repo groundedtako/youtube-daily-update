@@ -1,4 +1,3 @@
 display_name: YouTube Daily Update
-short_description: Build daily YouTube intelligence briefs with transcripts, summaries, quotes, and ticker matches.
+short_description: Build daily YouTube intelligence briefs with transcripts, summaries, quotes, and entity/topic matches.
 default_prompt: Run today's YouTube daily update and summarize the brief.
-

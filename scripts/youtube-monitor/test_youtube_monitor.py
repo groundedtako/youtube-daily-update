@@ -129,6 +129,30 @@ class YouTubeMonitorTests(unittest.TestCase):
         )
         self.assertEqual(mentions["unmapped_symbols"], ["CRWV"])
 
+    def test_load_aliases_file_accepts_generic_entities(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "aliases.json"
+            ym.write_json(
+                path,
+                {
+                    "aliases": {
+                        "AI_INFRA": ["AI infrastructure", "GPU clusters"],
+                        "NVDA": {"name": "Nvidia", "aliases": ["NVIDIA Corporation"]},
+                    }
+                },
+            )
+
+            aliases = ym.load_aliases_file(path)
+
+        self.assertEqual(aliases["AI_INFRA"], ["AI_INFRA", "AI infrastructure", "GPU clusters"])
+        self.assertEqual(aliases["NVDA"], ["NVDA", "Nvidia", "NVIDIA Corporation"])
+
+    def test_merge_aliases_combines_sources(self) -> None:
+        self.assertEqual(
+            ym.merge_aliases({"NVDA": ["NVDA", "Nvidia"]}, {"NVDA": ["NVIDIA Corporation"], "TSM": ["TSMC"]}),
+            {"NVDA": ["NVDA", "Nvidia", "NVIDIA Corporation"], "TSM": ["TSM", "TSMC"]},
+        )
+
     def test_parse_vtt_strips_tags_and_dedupes(self) -> None:
         content = """WEBVTT
 

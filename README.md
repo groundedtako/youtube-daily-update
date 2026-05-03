@@ -2,7 +2,15 @@
 
 Codex skill and CLI routine for building a daily YouTube intelligence brief from a curated channel list.
 
-It discovers recent uploads with the YouTube Data API, fetches timestamped captions with `yt-dlp`, summarizes transcripts with `summarize`, extracts ticker/entity matches from optional `Stocks/*/meta.json` files, and writes local Markdown artifacts under `youtube-db/`.
+The default prompt and reporting language are investing-focused because this was
+originally built for an investment research workflow. The monitor itself is
+general-purpose: it can summarize any channel list, extract timestamped quotes,
+track entities or topics, and write local Markdown artifacts under `youtube-db/`.
+
+It discovers recent uploads with the YouTube Data API, fetches timestamped
+captions with `yt-dlp`, summarizes transcripts with `summarize`, extracts
+entity matches from an optional aliases file and optional `Stocks/*/meta.json`
+files, and writes local Markdown artifacts under `youtube-db/`.
 
 ## What It Produces
 
@@ -13,7 +21,8 @@ It discovers recent uploads with the YouTube Data API, fetches timestamped capti
 - `youtube-db/runs/YYYY-MM-DD.json`: resumable run manifest.
 - `youtube-db/indexes/videos.jsonl`: processed-video index for dedupe.
 
-The routine does not write into `Stocks/`. Stock metadata is read only for alias matching.
+The routine does not write into `Stocks/`. Stock metadata is read only for alias
+matching when that folder exists.
 
 ## Dependencies
 
@@ -21,6 +30,7 @@ The routine does not write into `Stocks/`. Stock metadata is read only for alias
 - Python package: `requests`
 - CLI tools on `PATH`: `yt-dlp`, `summarize`
 - Environment: `YOUTUBE_API_KEY`
+- Optional: `youtube-db/config/aliases.json` for custom entity/topic aliases
 - Optional: a research repo with `Stocks/*/meta.json` for ticker aliases
 
 Install Python dependencies:
@@ -58,6 +68,38 @@ cp youtube-db/config/channels.example.json youtube-db/config/channels.json
 ```
 
 Edit `youtube-db/config/channels.json` to include the channels you want.
+
+Optional: create an aliases file for entities you care about:
+
+```bash
+cp youtube-db/config/aliases.example.json youtube-db/config/aliases.json
+```
+
+Aliases can represent tickers, topics, people, products, protocols, or anything
+else you want surfaced in the daily brief. Example:
+
+```json
+{
+  "aliases": {
+    "AI_INFRA": ["AI infrastructure", "GPU clusters", "data center capex"],
+    "ROBOTICS": ["humanoid robots", "robotics automation"]
+  }
+}
+```
+
+## Adapting It
+
+For investing research, keep the default prompt and optionally point
+`--repo-root` at a repo containing `Stocks/*/meta.json`.
+
+For a general knowledge brief:
+
+1. Edit `scripts/youtube-monitor/prompts/summary.md`.
+2. Rename sections such as `Investment Relevance` to your own decision lens,
+   for example `Research Relevance`, `Product Relevance`, or `Policy Relevance`.
+3. Put your custom entity/topic aliases in `youtube-db/config/aliases.json`.
+4. Use `--repo-root` only if you want summarize to run from a specific project
+   folder or you have a `Stocks/` directory to read.
 
 ## Run
 
@@ -98,7 +140,8 @@ scripts/youtube-monitor/run.sh \
   --repo-root /path/to/research-repo \
   --db-dir /path/to/research-repo/youtube-db \
   --config /path/to/research-repo/youtube-db/config/channels.json \
-  --env-file /path/to/research-repo/scripts/.env
+  --env-file /path/to/research-repo/scripts/.env \
+  --aliases-file /path/to/research-repo/youtube-db/config/aliases.json
 ```
 
 ## Behavior
@@ -112,4 +155,3 @@ scripts/youtube-monitor/run.sh \
 ## Codex Skill
 
 This repository can be installed as a Codex skill. The skill entrypoint is `SKILL.md`; the executable routine lives under `scripts/youtube-monitor/`.
-

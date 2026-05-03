@@ -881,6 +881,54 @@ def load_stock_aliases(repo_root: Path) -> dict[str, list[str]]:
     return {symbol: sorted(set(values), key=str.casefold) for symbol, values in aliases.items()}
 
 
+def load_aliases_file(path: Path) -> dict[str, list[str]]:
+    if not path.exists():
+        return {}
+    data = read_json(path)
+    raw_aliases = data.get("aliases", data)
+    if not isinstance(raw_aliases, dict):
+        raise MonitorError("Aliases file must be an object or contain an aliases object.")
+
+    aliases: dict[str, list[str]] = {}
+    for key, value in raw_aliases.items():
+        symbol = str(key).strip().upper()
+        if not symbol:
+            continue
+        if isinstance(value, str):
+            values = [value]
+        elif isinstance(value, list):
+            values = [str(item) for item in value if str(item).strip()]
+        elif isinstance(value, dict):
+            values = [
+                str(item)
+                for item in [
+                    value.get("name"),
+                    value.get("company"),
+                    value.get("label"),
+                    *value.get("aliases", []),
+                ]
+                if item is not None and str(item).strip()
+            ]
+        else:
+            continue
+        unique_values = {item.strip() for item in values if item.strip()}
+        aliases[symbol] = [symbol, *sorted(unique_values - {symbol}, key=str.casefold)]
+    return aliases
+
+
+def merge_aliases(*sources: dict[str, list[str]]) -> dict[str, list[str]]:
+    merged: dict[str, list[str]] = {}
+    for source in sources:
+        for symbol, values in source.items():
+            merged.setdefault(symbol, [])
+            merged[symbol].extend(values)
+    normalized: dict[str, list[str]] = {}
+    for symbol, values in merged.items():
+        unique_values = {value for value in values if value}
+        normalized[symbol] = [symbol, *sorted(unique_values - {symbol}, key=str.casefold)]
+    return normalized
+
+
 def alias_pattern(alias: str) -> re.Pattern[str]:
     escaped = re.escape(alias)
     if re.fullmatch(r"[A-Z]{1,6}", alias):
@@ -1436,6 +1484,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--db-dir", type=Path, default=DEFAULT_DB_DIR)
     parser.add_argument("--repo-root", type=Path, default=REPO_ROOT, help="Research repo root used for stock alias discovery and summarize cwd.")
     parser.add_argument("--env-file", type=Path, default=None, help="Optional .env file. Defaults to <repo-root>/scripts/.env.")
+    parser.add_argument("--aliases-file", type=Path, default=None, help="Optional JSON aliases file for entity matching. Defaults to <db-dir>/config/aliases.json when present.")
     parser.add_argument("--date", default=date.today().isoformat())
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--lookback-count", type=int, default=3)
@@ -1552,7 +1601,8 @@ def main(argv: list[str] | None = None) -> int:
     config = load_config(args.config)
     channels = channel_configs(config)
     ensure_layout(args.db_dir)
-    stock_aliases = load_stock_aliases(repo_root)
+    aliases_file = args.aliases_file or args.db_dir / "config" / "aliases.json"
+    stock_aliases = merge_aliases(load_stock_aliases(repo_root), load_aliases_file(aliases_file))
 
     if args.refresh_quotes:
         summary = refresh_all_quotes(args.db_dir, stock_aliases)

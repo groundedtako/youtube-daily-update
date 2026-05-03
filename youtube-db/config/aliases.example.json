@@ -1,0 +1,11 @@
+{
+  "aliases": {
+    "NVDA": {
+      "name": "Nvidia",
+      "aliases": ["NVIDIA Corporation", "Nvidia GPU"]
+    },
+    "AI_INFRA": ["AI infrastructure", "GPU clusters", "data center capex"],
+    "ROBOTICS": ["humanoid robots", "robotics automation"]
+  }
+}
+
