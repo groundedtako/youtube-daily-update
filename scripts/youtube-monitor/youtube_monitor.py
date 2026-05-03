@@ -1392,6 +1392,39 @@ def decision_lens_summary(summary: str, max_chars: int = 420) -> str:
     return "No separate decision-lens section was generated for this artifact; use the judgment and evidence sections."
 
 
+def concise_summary_bullets(summary: str, heading: str, max_items: int = 3, max_chars: int = 220) -> list[str]:
+    bullets: list[str] = []
+    for line in extract_summary_section(summary, heading):
+        cleaned = re.sub(r"^\s*(?:[-*]|\d+[.)])\s+", "", line).strip()
+        if not cleaned:
+            continue
+        text = strip_inline_markdown(cleaned)
+        if len(text) > max_chars:
+            text = text[: max_chars - 1].rstrip() + "..."
+        bullets.append(text)
+        if len(bullets) >= max_items:
+            break
+    return bullets
+
+
+def quote_highlights(insights: list[dict[str, Any]], max_items: int = 2, max_chars: int = 220) -> list[dict[str, str]]:
+    highlights: list[dict[str, str]] = []
+    for insight in insights[:max_items]:
+        text = strip_inline_markdown(str(insight.get("quote") or insight.get("claim") or "")).strip()
+        if not text:
+            continue
+        if len(text) > max_chars:
+            text = text[: max_chars - 1].rstrip() + "..."
+        highlights.append(
+            {
+                "timestamp": str(insight.get("timestamp") or ""),
+                "text": text,
+                "url": str(insight.get("url") or ""),
+            }
+        )
+    return highlights
+
+
 def compact_artifact_links(rel_dir: Path, transcript_file: str | None) -> str:
     return (
         f"[summary](../{rel_dir}/summary.md) · "
@@ -1446,6 +1479,8 @@ def build_review_items(
                 "entities": insight.get("mentioned_entities", []),
                 "core_take": concise_core_take(result.get("summary", ""), max_chars=320),
                 "decision_lens": decision_lens_summary(result.get("summary", ""), max_chars=420),
+                "key_insights": concise_summary_bullets(result.get("summary", ""), "Key Insights", max_items=3),
+                "quote_highlights": quote_highlights(result.get("insights", []), max_items=2),
                 "watch_worthiness": concise_summary_section(result.get("summary", ""), "Watch Worthiness", max_chars=220)
                 or "No watchworthiness score was generated for this artifact; future summaries include one.",
                 "claim": insight["claim"],
@@ -1545,26 +1580,45 @@ def render_review_html(run_date: str, items: list[dict[str, Any]]) -> str:
         core_take = item.get("core_take") or "No core take available."
         relevance = item.get("decision_lens") or item.get("investment_relevance") or "No relevance assessment available."
         watch_worthiness = item.get("watch_worthiness") or "No watchworthiness assessment available."
+        key_insights = item.get("key_insights") or []
+        quote_items = item.get("quote_highlights") or []
+        key_insights_html = "\n".join(f"<li>{html.escape(str(insight))}</li>" for insight in key_insights) or "<li>No extracted key insights available.</li>"
+        quotes_html = "\n".join(
+            f"<blockquote>{html.escape(str(quote.get('text', '')))}"
+            f"<footer><a href=\"{html.escape(str(quote.get('url', item['insight_url'])))}\">"
+            f"{html.escape(str(quote.get('timestamp') or 'source'))}</a></footer></blockquote>"
+            for quote in quote_items
+        ) or "<p>No quote highlights available.</p>"
         item_cards.append(
             f"""
 <article class="card" data-review-id="{html.escape(item['review_id'])}">
   <div class="meta">{html.escape(item['review_id'])} · {html.escape(item['channel'])} · {html.escape(entities)}</div>
   <h2>{html.escape(item['title'])}</h2>
   <section>
-    <h3>Judgment</h3>
+    <h3>Summary Judgment</h3>
     <p>{html.escape(core_take)}</p>
   </section>
-  <section>
-    <h3>Why It Matters</h3>
-    <p>{html.escape(relevance)}</p>
-  </section>
-  <section>
-    <h3>Evidence</h3>
+  <div class="detail-grid">
+    <section class="panel panel-opinion">
+      <h3>Highlighted Opinion</h3>
+      <p>{html.escape(relevance)}</p>
+    </section>
+    <section class="panel">
+      <h3>Key Insights</h3>
+      <ul>{key_insights_html}</ul>
+    </section>
+    <section class="panel">
+      <h3>Key Quotes</h3>
+      {quotes_html}
+    </section>
+    <section class="panel">
+      <h3>Watchworthiness</h3>
+      <p>{html.escape(watch_worthiness)}</p>
+    </section>
+  </div>
+  <section class="evidence">
+    <h3>Primary Evidence</h3>
     <p>{html.escape(item['claim'])}</p>
-  </section>
-  <section>
-    <h3>Watchworthiness</h3>
-    <p>{html.escape(watch_worthiness)}</p>
   </section>
   <p><a href="{html.escape(item['insight_url'])}">Open source @ {html.escape(item.get('timestamp', 'start'))}</a></p>
   <input aria-label="reason" placeholder="optional reason, e.g. indexing_saturated" />
@@ -1586,14 +1640,22 @@ def render_review_html(run_date: str, items: list[dict[str, Any]]) -> str:
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>YouTube Review — {html.escape(run_date)}</title>
   <style>
-    body {{ background: #111; color: #f4f4f4; font: 16px/1.5 -apple-system, BlinkMacSystemFont, sans-serif; margin: 0; padding: 32px; }}
-    main {{ max-width: 900px; margin: 0 auto; }}
-    .card {{ background: #1e1e1e; border: 1px solid #333; border-radius: 16px; margin: 16px 0; padding: 20px; }}
+    body {{ background: #111; color: #f4f4f4; font: 18px/1.55 -apple-system, BlinkMacSystemFont, sans-serif; margin: 0; padding: 32px; }}
+    main {{ max-width: 1180px; margin: 0 auto; }}
+    .card {{ background: #1e1e1e; border: 1px solid #333; border-radius: 24px; margin: 28px 0; padding: 36px; }}
     .meta {{ color: #aaa; font-size: 14px; }}
     h1 {{ margin-bottom: 4px; }}
-    h2 {{ font-size: 20px; margin: 8px 0; }}
+    h2 {{ font-size: 32px; line-height: 1.2; margin: 12px 0 24px; }}
     h3 {{ color: #bbb; font-size: 13px; letter-spacing: .08em; margin: 18px 0 4px; text-transform: uppercase; }}
     section p {{ margin: 0; }}
+    .detail-grid {{ display: grid; gap: 16px; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); margin: 22px 0; }}
+    .panel {{ background: #171717; border: 1px solid #333; border-radius: 16px; padding: 16px; }}
+    .panel-opinion {{ border-color: #4b5f8f; background: #171b26; }}
+    ul {{ margin: 0; padding-left: 20px; }}
+    li {{ margin: 6px 0; }}
+    blockquote {{ border-left: 3px solid #7da7ff; color: #e8eefc; margin: 8px 0; padding-left: 12px; }}
+    blockquote footer {{ color: #aaa; font-size: 14px; margin-top: 4px; }}
+    .evidence {{ color: #ddd; }}
     a {{ color: #8ab4ff; }}
     input {{ box-sizing: border-box; width: 100%; padding: 10px; margin: 8px 0 12px; border-radius: 10px; border: 1px solid #555; background: #111; color: #fff; }}
     button {{ margin: 4px 8px 4px 0; padding: 10px 12px; border-radius: 999px; border: 1px solid #444; background: #2a2a2a; color: #fff; cursor: pointer; }}

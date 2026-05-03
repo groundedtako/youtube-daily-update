@@ -15,7 +15,8 @@ educational. Do not merely restate facts; explain the implication.
 
 ## Key Insights
 3-8 bullets. Each bullet must be a specific claim rooted in the transcript.
-Include a timestamp from the transcript when available.
+Include a timestamp from the transcript when available. Prioritize the most
+decision-relevant insights, not the first facts mentioned.
 
 ## Investment Relevance
 Call out every company, ticker, industry, technology, or macro theme mentioned.
@@ -30,7 +31,9 @@ lens, such as Research Relevance, Product Relevance, Policy Relevance, or
 Learning Relevance.
 
 ## Best Quotes
-1-3 short exact excerpts with timestamps. Use straight quotes only.
+2-4 short exact excerpts with timestamps. Use straight quotes only. Choose
+quotes that reveal the speaker's opinion, variant perception, or strongest
+evidence rather than generic setup.
 
 ## Watch Worthiness
 High, Medium, or Low, with one sentence explaining why for a repeat viewer who

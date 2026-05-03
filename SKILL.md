@@ -115,7 +115,7 @@ For investing workflows, do not automatically write findings into `Stocks/`; kee
 
 - The monitor skips videos shorter than 3 minutes.
 - The monitor writes review state, review HTML, and feedback JSONL under `youtube-db/review/`.
-- Review cards should show judgment, why it matters, evidence, and watchworthiness; avoid fact-only cards for investment content.
+- Review cards should use the larger decision layout: summary judgment, highlighted opinion, key insights, key quotes, primary evidence, watchworthiness, and feedback actions; avoid fact-only cards for investment content.
 - The summary prompt should be opinionated while remaining transcript-grounded: state what the video changes, confirms, or fails to change for the decision lens.
 - The monitor reads `youtube-db/config/aliases.json` for generic matching and `Stocks/*/meta.json` only for optional investing alias matching.
 - The monitor should not depend on other local skills.

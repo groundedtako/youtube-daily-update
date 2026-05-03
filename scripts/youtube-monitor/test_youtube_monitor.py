@@ -257,6 +257,32 @@ Medium — useful if this is not already in your base rate.
             ym.decision_lens_summary("## Core Take\nUseful judgment."),
         )
 
+    def test_concise_summary_bullets_extracts_limited_items(self) -> None:
+        summary = """## Key Insights
+- [1:00] First useful insight with **emphasis**.
+- [2:00] Second useful insight.
+- [3:00] Third useful insight.
+- [4:00] Fourth useful insight.
+"""
+        self.assertEqual(
+            ym.concise_summary_bullets(summary, "Key Insights", max_items=2),
+            ["[1:00] First useful insight with emphasis.", "[2:00] Second useful insight."],
+        )
+
+    def test_quote_highlights_uses_top_insights(self) -> None:
+        self.assertEqual(
+            ym.quote_highlights(
+                [
+                    {"timestamp": "1:00", "quote": "A direct quote.", "url": "https://example.com/1"},
+                    {"timestamp": "2:00", "claim": "A fallback claim.", "url": "https://example.com/2"},
+                ]
+            ),
+            [
+                {"timestamp": "1:00", "text": "A direct quote.", "url": "https://example.com/1"},
+                {"timestamp": "2:00", "text": "A fallback claim.", "url": "https://example.com/2"},
+            ],
+        )
+
     def test_parse_feedback_text_accepts_chat_commands(self) -> None:
         self.assertEqual(
             ym.parse_feedback_text("w1 down indexing_saturated\nW3 promote"),
@@ -294,12 +320,14 @@ Medium — useful if this is not already in your base rate.
                 "output_dir": artifact_dir,
                 "summary": (
                     "## Core Take\nUseful but saturated indexing advice.\n\n"
+                    "## Key Insights\n- Index funds are useful but familiar.\n- Behavior matters more than product choice.\n\n"
                     "## Investment Relevance\nThe opinion is sensible but does not change the investing action if indexing is already familiar.\n\n"
                     "## Watch Worthiness\nMedium — good primer, low novelty."
                 ),
                 "insights": [
                     {
                         "claim": "Index funds beat many active managers.",
+                        "quote": "Index funds beat many active managers.",
                         "timestamp": "12:00",
                         "timestamp_seconds": 720,
                         "url": "https://www.youtube.com/watch?v=abc&t=720s",
@@ -319,10 +347,13 @@ Medium — useful if this is not already in your base rate.
             self.assertEqual(state["items"][0]["review_id"], "W1")
             self.assertEqual(state["items"][0]["core_take"], "Useful but saturated indexing advice.")
             self.assertIn("does not change", state["items"][0]["decision_lens"])
+            self.assertEqual(state["items"][0]["key_insights"][0], "Index funds are useful but familiar.")
+            self.assertEqual(state["items"][0]["quote_highlights"][0]["text"], "Index funds beat many active managers.")
             html = (db_dir / "review" / "2026-05-02.html").read_text(encoding="utf-8")
             self.assertIn("More like this", html)
             self.assertIn("Workflow action", html)
-            self.assertIn("Why It Matters", html)
+            self.assertIn("Highlighted Opinion", html)
+            self.assertIn("Key Quotes", html)
             self.assertIn("file://", html)
 
     def test_apply_feedback_text_enriches_jsonl_record(self) -> None:
