@@ -20,6 +20,9 @@ files, and writes local Markdown artifacts under `youtube-db/`.
 - `youtube-db/videos/.../transcript.clean.md`: cleaned timestamped transcript.
 - `youtube-db/runs/YYYY-MM-DD.json`: resumable run manifest.
 - `youtube-db/indexes/videos.jsonl`: processed-video index for dedupe.
+- `youtube-db/review/YYYY-MM-DD.json`: stable review IDs for feedback.
+- `youtube-db/review/YYYY-MM-DD.html`: optional local click-review page.
+- `youtube-db/review/feedback.jsonl`: appended watchworthiness feedback.
 
 The routine does not write into `Stocks/`. Stock metadata is read only for alias
 matching when that folder exists.
@@ -127,6 +130,18 @@ Refresh quotes and insight extraction from existing artifacts:
 scripts/youtube-monitor/run.sh --refresh-quotes
 ```
 
+Record natural feedback from the daily brief:
+
+```bash
+scripts/youtube-monitor/run.sh --date 2026-05-02 --feedback "W1 down indexing_saturated; W3 promote"
+```
+
+Use the optional local click UI:
+
+```bash
+scripts/youtube-monitor/run.sh --date 2026-05-02 --serve-review
+```
+
 Discovery-only dry run:
 
 ```bash
@@ -150,6 +165,7 @@ scripts/youtube-monitor/run.sh \
 - Normal runs do not rerun a completed day.
 - Interrupted runs resume pending or failed manifest items.
 - Quote extraction groups adjacent summary timestamps into coherent quote blocks.
+- Daily review items get stable IDs such as `W1`; feedback can be appended by chat-style command or by the local review UI.
 - Failed transcript or summary attempts are recorded in the daily brief.
 
 ## Codex Skill

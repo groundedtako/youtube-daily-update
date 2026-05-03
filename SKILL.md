@@ -46,6 +46,8 @@ If today's run is already completed, use `--refresh-report` instead of rerunning
 ```bash
 scripts/youtube-monitor/run.sh --lookback-count 3 --workers 5 --refresh-report
 scripts/youtube-monitor/run.sh --refresh-quotes
+scripts/youtube-monitor/run.sh --date YYYY-MM-DD --feedback "W1 down indexing_saturated; W3 promote"
+scripts/youtube-monitor/run.sh --date YYYY-MM-DD --serve-review
 scripts/youtube-monitor/run.sh --lookback-count 3 --workers 5 --dry-run
 scripts/youtube-monitor/run.sh --lookback-count 3 --workers 5 --force
 ```
@@ -81,11 +83,21 @@ Read `youtube-db/daily/YYYY-MM-DD.md` after a run and report:
 - Review Queue highlights
 - daily brief path
 
+When the user gives watchworthiness feedback, parse natural commands from the daily brief review IDs:
+
+- `W1 up`: more like this
+- `W1 down indexing_saturated`: less like this, with reason code
+- `W1 known`: already-known or saturated for the user
+- `W1 promote`: promote to research/manual follow-up queue
+
+Append feedback with `--feedback` or `--feedback-file`; do not rewrite historical briefs just to record feedback.
+
 For investing workflows, do not automatically write findings into `Stocks/`; keep promotion manual unless the user explicitly asks for distribution.
 
 ## Maintenance Notes
 
 - The monitor skips videos shorter than 3 minutes.
+- The monitor writes review state, review HTML, and feedback JSONL under `youtube-db/review/`.
 - The monitor reads `youtube-db/config/aliases.json` for generic matching and `Stocks/*/meta.json` only for optional investing alias matching.
 - The monitor should not depend on other local skills.
 - Run `python3 scripts/youtube-monitor/test_youtube_monitor.py` after code changes.

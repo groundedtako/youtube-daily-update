@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -233,6 +234,90 @@ This is the useful daily brief sentence that should appear.
             ym.concise_core_take(summary),
             "This is the useful daily brief sentence that should appear.",
         )
+
+    def test_parse_feedback_text_accepts_chat_commands(self) -> None:
+        self.assertEqual(
+            ym.parse_feedback_text("w1 down indexing_saturated\nW3 promote"),
+            [
+                {
+                    "review_id": "W1",
+                    "action": "down",
+                    "reason_codes": ["indexing_saturated"],
+                    "raw_text": "w1 down indexing_saturated",
+                },
+                {
+                    "review_id": "W3",
+                    "action": "promote",
+                    "reason_codes": [],
+                    "raw_text": "W3 promote",
+                },
+            ],
+        )
+
+    def test_write_daily_report_emits_review_ids_and_html(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            db_dir = Path(tmp)
+            artifact_dir = db_dir / "videos" / "channel" / "2026-05-02--abc--video"
+            result = {
+                "metadata": {
+                    "video_id": "abc",
+                    "title": "Stock Expert Interview",
+                    "channel": "The Diary Of A CEO",
+                    "channel_handle": "@diaryofaceo",
+                    "source_url": "https://www.youtube.com/watch?v=abc",
+                    "duration_seconds": 600,
+                    "entity_mentions": {"mapped": [], "unmapped_symbols": []},
+                    "transcript_file": "transcript.clean.md",
+                },
+                "output_dir": artifact_dir,
+                "summary": "## Core Take\nUseful but saturated indexing advice.",
+                "insights": [
+                    {
+                        "claim": "Index funds beat many active managers.",
+                        "timestamp": "12:00",
+                        "timestamp_seconds": 720,
+                        "url": "https://www.youtube.com/watch?v=abc&t=720s",
+                        "mentioned_entities": ["SPY"],
+                    }
+                ],
+            }
+
+            daily_path = ym.write_daily_report(db_dir, "2026-05-02", [result], [], [], False)
+
+            daily = daily_path.read_text(encoding="utf-8")
+            self.assertIn("**W1**", daily)
+            self.assertIn("`W1 up | W1 down <reason> | W1 known | W1 promote`", daily)
+            state = json.loads((db_dir / "review" / "2026-05-02.json").read_text(encoding="utf-8"))
+            self.assertEqual(state["items"][0]["review_id"], "W1")
+            self.assertIn("More like this", (db_dir / "review" / "2026-05-02.html").read_text(encoding="utf-8"))
+
+    def test_apply_feedback_text_enriches_jsonl_record(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            db_dir = Path(tmp)
+            ym.write_json(
+                db_dir / "review" / "2026-05-02.json",
+                {
+                    "run_date": "2026-05-02",
+                    "items": [
+                        {
+                            "review_id": "W1",
+                            "video_id": "abc",
+                            "title": "Stock Expert Interview",
+                            "channel": "The Diary Of A CEO",
+                            "source_url": "https://www.youtube.com/watch?v=abc",
+                            "artifact_dir": "videos/channel/abc",
+                        }
+                    ],
+                },
+            )
+
+            count = ym.apply_feedback_text(db_dir, "2026-05-02", "W1 down indexing_saturated")
+
+            self.assertEqual(count, 1)
+            record = json.loads((db_dir / "review" / "feedback.jsonl").read_text(encoding="utf-8"))
+            self.assertEqual(record["action"], "down")
+            self.assertEqual(record["reason_codes"], ["indexing_saturated"])
+            self.assertEqual(record["video_id"], "abc")
 
 
 if __name__ == "__main__":

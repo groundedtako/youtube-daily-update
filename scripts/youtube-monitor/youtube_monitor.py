@@ -10,6 +10,7 @@ Markdown brief under youtube-db/.
 from __future__ import annotations
 
 import argparse
+import html
 import json
 import os
 import re
@@ -19,6 +20,7 @@ import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
+from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from threading import Lock
 from typing import Any, Callable
@@ -34,6 +36,9 @@ DEFAULT_CONFIG = DEFAULT_DB_DIR / "config" / "channels.json"
 DEFAULT_ENV = REPO_ROOT / "scripts" / ".env"
 YOUTUBE_API_BASE = "https://www.googleapis.com/youtube/v3"
 MIN_VIDEO_DURATION_SECONDS = 180
+FEEDBACK_ACTIONS = {"up", "down", "known", "promote"}
+DEFAULT_REVIEW_HOST = "127.0.0.1"
+DEFAULT_REVIEW_PORT = 8765
 
 
 class MonitorError(RuntimeError):
@@ -1374,6 +1379,272 @@ def one_line_table_cell(value: str) -> str:
     return value.replace("|", "\\|").replace("\n", " ").strip()
 
 
+def feedback_path(db_dir: Path) -> Path:
+    return db_dir / "review" / "feedback.jsonl"
+
+
+def review_state_path(db_dir: Path, run_date: str) -> Path:
+    return db_dir / "review" / f"{run_date}.json"
+
+
+def review_html_path(db_dir: Path, run_date: str) -> Path:
+    return db_dir / "review" / f"{run_date}.html"
+
+
+def review_id(index: int) -> str:
+    return f"W{index}"
+
+
+def build_review_items(
+    db_dir: Path,
+    processed_results: list[dict[str, Any]],
+    max_items: int = 15,
+) -> tuple[list[dict[str, Any]], int]:
+    promotion_items = [
+        (result, result["metadata"], result["insights"][0])
+        for result in processed_results
+        if result["insights"]
+    ]
+    review_items: list[dict[str, Any]] = []
+    for idx, (result, metadata, insight) in enumerate(promotion_items[:max_items], start=1):
+        output_dir = result["output_dir"]
+        artifact_dir = str(output_dir.relative_to(db_dir)) if output_dir.is_relative_to(db_dir) else str(output_dir)
+        review_items.append(
+            {
+                "review_id": review_id(idx),
+                "video_id": metadata["video_id"],
+                "title": metadata["title"],
+                "channel": metadata["channel"],
+                "channel_handle": metadata.get("channel_handle", ""),
+                "source_url": metadata["source_url"],
+                "duration_seconds": metadata.get("duration_seconds", 0),
+                "artifact_dir": artifact_dir,
+                "entities": insight.get("mentioned_entities", []),
+                "claim": insight["claim"],
+                "timestamp": insight.get("timestamp", ""),
+                "timestamp_seconds": insight.get("timestamp_seconds"),
+                "insight_url": insight.get("url", metadata["source_url"]),
+                "feedback_hint": f"{review_id(idx)} up | {review_id(idx)} down <reason> | {review_id(idx)} known | {review_id(idx)} promote",
+            }
+        )
+    return review_items, max(0, len(promotion_items) - max_items)
+
+
+def write_review_state(db_dir: Path, run_date: str, items: list[dict[str, Any]]) -> Path:
+    path = review_state_path(db_dir, run_date)
+    write_json(
+        path,
+        {
+            "run_date": run_date,
+            "generated_at": utc_now(),
+            "items": items,
+        },
+    )
+    return path
+
+
+def parse_feedback_text(text: str) -> list[dict[str, Any]]:
+    records: list[dict[str, Any]] = []
+    chunks = re.split(r"[\n;]+", text)
+    for raw_chunk in chunks:
+        chunk = raw_chunk.strip()
+        if not chunk:
+            continue
+        tokens = chunk.split()
+        if len(tokens) < 2:
+            raise MonitorError(f"Feedback needs '<review_id> <action>': {chunk}")
+        candidate_id = tokens[0].upper()
+        if not re.fullmatch(r"W\d+", candidate_id):
+            raise MonitorError(f"Invalid review id '{tokens[0]}'. Expected W1, W2, ...")
+        action = tokens[1].casefold()
+        if action not in FEEDBACK_ACTIONS:
+            raise MonitorError(
+                f"Invalid feedback action '{tokens[1]}'. Expected one of: {', '.join(sorted(FEEDBACK_ACTIONS))}"
+            )
+        records.append(
+            {
+                "review_id": candidate_id,
+                "action": action,
+                "reason_codes": tokens[2:],
+                "raw_text": chunk,
+            }
+        )
+    return records
+
+
+def load_review_state(db_dir: Path, run_date: str) -> dict[str, Any]:
+    path = review_state_path(db_dir, run_date)
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError as exc:
+        raise MonitorError(f"Missing review state: {path}. Rebuild the daily report first.") from exc
+    except json.JSONDecodeError as exc:
+        raise MonitorError(f"Invalid review state JSON in {path}: {exc}") from exc
+
+
+def append_feedback_records(db_dir: Path, run_date: str, records: list[dict[str, Any]]) -> int:
+    state = load_review_state(db_dir, run_date)
+    items_by_id = {item["review_id"]: item for item in state.get("items", [])}
+    path = feedback_path(db_dir)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as handle:
+        for record in records:
+            item = items_by_id.get(record["review_id"])
+            if item is None:
+                raise MonitorError(f"Review id {record['review_id']} was not found for {run_date}.")
+            enriched = {
+                "recorded_at": utc_now(),
+                "run_date": run_date,
+                **record,
+                "video_id": item["video_id"],
+                "title": item["title"],
+                "channel": item["channel"],
+                "source_url": item["source_url"],
+                "artifact_dir": item["artifact_dir"],
+            }
+            handle.write(json.dumps(enriched, sort_keys=True) + "\n")
+    return len(records)
+
+
+def apply_feedback_text(db_dir: Path, run_date: str, text: str) -> int:
+    return append_feedback_records(db_dir, run_date, parse_feedback_text(text))
+
+
+def render_review_html(run_date: str, items: list[dict[str, Any]]) -> str:
+    item_cards = []
+    for item in items:
+        entities = ", ".join(item.get("entities", [])) or "No entity detected"
+        item_cards.append(
+            f"""
+<article class="card" data-review-id="{html.escape(item['review_id'])}">
+  <div class="meta">{html.escape(item['review_id'])} · {html.escape(item['channel'])} · {html.escape(entities)}</div>
+  <h2>{html.escape(item['title'])}</h2>
+  <p>{html.escape(item['claim'])}</p>
+  <p><a href="{html.escape(item['insight_url'])}">Open source @ {html.escape(item.get('timestamp', 'start'))}</a></p>
+  <input aria-label="reason" placeholder="optional reason, e.g. indexing_saturated" />
+  <div class="actions">
+    <button data-action="up">👍 More like this</button>
+    <button data-action="down">👎 Less like this</button>
+    <button data-action="known">💤 Already know this</button>
+    <button data-action="promote">🎯 Promote</button>
+  </div>
+  <div class="status"></div>
+</article>
+"""
+        )
+    cards = "\n".join(item_cards) or "<p>No review items for this date.</p>"
+    return f"""<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>YouTube Review — {html.escape(run_date)}</title>
+  <style>
+    body {{ background: #111; color: #f4f4f4; font: 16px/1.5 -apple-system, BlinkMacSystemFont, sans-serif; margin: 0; padding: 32px; }}
+    main {{ max-width: 900px; margin: 0 auto; }}
+    .card {{ background: #1e1e1e; border: 1px solid #333; border-radius: 16px; margin: 16px 0; padding: 20px; }}
+    .meta {{ color: #aaa; font-size: 14px; }}
+    h1 {{ margin-bottom: 4px; }}
+    h2 {{ font-size: 20px; margin: 8px 0; }}
+    a {{ color: #8ab4ff; }}
+    input {{ box-sizing: border-box; width: 100%; padding: 10px; margin: 8px 0 12px; border-radius: 10px; border: 1px solid #555; background: #111; color: #fff; }}
+    button {{ margin: 4px 8px 4px 0; padding: 10px 12px; border-radius: 999px; border: 1px solid #444; background: #2a2a2a; color: #fff; cursor: pointer; }}
+    button:hover {{ background: #3a3a3a; }}
+    .status {{ color: #9be28f; min-height: 20px; margin-top: 8px; }}
+  </style>
+</head>
+<body>
+<main>
+  <h1>YouTube Review — {html.escape(run_date)}</h1>
+  <p>Buttons require the local review server. Chat fallback works with commands like <code>W1 down indexing_saturated</code>.</p>
+  {cards}
+</main>
+<script>
+document.addEventListener("click", async (event) => {{
+  const button = event.target.closest("button[data-action]");
+  if (!button) return;
+  const card = button.closest(".card");
+  const reason = card.querySelector("input").value.trim();
+  const response = await fetch("/feedback", {{
+    method: "POST",
+    headers: {{ "Content-Type": "application/json" }},
+    body: JSON.stringify({{
+      review_id: card.dataset.reviewId,
+      action: button.dataset.action,
+      reason_codes: reason ? reason.split(/\\s+/) : []
+    }})
+  }});
+  const status = card.querySelector(".status");
+  status.textContent = response.ok ? "Saved" : await response.text();
+}});
+</script>
+</body>
+</html>
+"""
+
+
+def write_review_html(db_dir: Path, run_date: str, items: list[dict[str, Any]]) -> Path:
+    path = review_html_path(db_dir, run_date)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(render_review_html(run_date, items), encoding="utf-8")
+    return path
+
+
+def serve_review(db_dir: Path, run_date: str, host: str, port: int) -> None:
+    state = load_review_state(db_dir, run_date)
+    html_body = render_review_html(run_date, state.get("items", [])).encode("utf-8")
+
+    class ReviewHandler(BaseHTTPRequestHandler):
+        def do_GET(self) -> None:
+            if self.path in ("/", f"/{run_date}.html"):
+                self.send_response(200)
+                self.send_header("Content-Type", "text/html; charset=utf-8")
+                self.send_header("Content-Length", str(len(html_body)))
+                self.end_headers()
+                self.wfile.write(html_body)
+                return
+            if self.path == "/review-state":
+                payload = json.dumps(state, indent=2).encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json; charset=utf-8")
+                self.send_header("Content-Length", str(len(payload)))
+                self.end_headers()
+                self.wfile.write(payload)
+                return
+            self.send_error(404)
+
+        def do_POST(self) -> None:
+            if self.path != "/feedback":
+                self.send_error(404)
+                return
+            try:
+                length = int(self.headers.get("Content-Length", "0"))
+                payload = json.loads(self.rfile.read(length).decode("utf-8"))
+                record = {
+                    "review_id": str(payload.get("review_id", "")).upper(),
+                    "action": str(payload.get("action", "")).casefold(),
+                    "reason_codes": [str(item) for item in payload.get("reason_codes", [])],
+                    "raw_text": "review-ui",
+                }
+                if record["action"] not in FEEDBACK_ACTIONS or not re.fullmatch(r"W\d+", record["review_id"]):
+                    raise MonitorError("Invalid feedback payload.")
+                append_feedback_records(db_dir, run_date, [record])
+            except Exception as exc:
+                self.send_response(400)
+                self.end_headers()
+                self.wfile.write(str(exc).encode("utf-8"))
+                return
+            self.send_response(204)
+            self.end_headers()
+
+        def log_message(self, format: str, *args: Any) -> None:
+            log_progress(format % args)
+
+    server = HTTPServer((host, port), ReviewHandler)
+    log_progress(f"review server http://{host}:{port}/")
+    server.serve_forever()
+
+
 def write_daily_report(
     db_dir: Path,
     run_date: str,
@@ -1384,6 +1655,9 @@ def write_daily_report(
 ) -> Path:
     path = db_dir / "daily" / f"{run_date}.md"
     path.parent.mkdir(parents=True, exist_ok=True)
+    review_items, remaining_review_items = build_review_items(db_dir, processed_results)
+    state_path = write_review_state(db_dir, run_date, review_items)
+    html_path = write_review_html(db_dir, run_date, review_items)
     lines = [
         "- [ ] read",
         "",
@@ -1398,8 +1672,10 @@ def write_daily_report(
         f"- Videos skipped: {len(skipped)}",
         f"- Videos failed: {len(failures)}",
         f"- Source-backed quote candidates: {sum(len(item['insights']) for item in processed_results)}",
+        f"- Review UI: `{html_path.relative_to(db_dir)}`",
+        f"- Review state: `{state_path.relative_to(db_dir)}`",
         "",
-        "Use the video index for triage; open the linked artifact when a video is worth deeper review.",
+        "Use the video index for triage; reply with compact feedback such as `W1 up`, `W2 down indexing_saturated`, `W3 known`, or `W4 promote`.",
         "",
     ]
 
@@ -1430,24 +1706,18 @@ def write_daily_report(
         lines.append("")
 
     lines.extend(["## Review Queue", ""])
-    promotion_items = [
-        (result["metadata"], result["insights"][0])
-        for result in processed_results
-        if result["insights"]
-    ]
-    if promotion_items:
-        max_queue_items = 15
-        for idx, (metadata, insight) in enumerate(promotion_items[:max_queue_items], start=1):
-            entities = ", ".join(insight.get("mentioned_entities", [])) or "no entity detected"
+    if review_items:
+        for item in review_items:
+            entities = ", ".join(item.get("entities", [])) or "no entity detected"
             lines.extend(
                 [
-                    f"{idx}. **{entities}** — {insight['claim']}",
-                    f"   Source: [{metadata['channel']} @ {insight['timestamp']}]({insight['url']})",
-                    "   Status: pending manual review",
+                    f"- **{item['review_id']}** · **{entities}** — {item['claim']}",
+                    f"  Source: [{item['channel']} @ {item['timestamp']}]({item['insight_url']})",
+                    f"  Feedback: `{item['feedback_hint']}`",
                 ]
             )
-        if len(promotion_items) > max_queue_items:
-            lines.append(f"{len(promotion_items) - max_queue_items} more videos have quote candidates in their linked `quotes.md` files.")
+        if remaining_review_items:
+            lines.append(f"{remaining_review_items} more videos have quote candidates in their linked `quotes.md` files.")
     else:
         lines.append("No quote candidates today.")
     lines.append("")
@@ -1492,6 +1762,11 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--force", action="store_true", help="Ignore a completed run manifest for this date.")
     parser.add_argument("--refresh-report", action="store_true", help="Rebuild the daily Markdown brief from the run manifest without reprocessing videos.")
     parser.add_argument("--refresh-quotes", action="store_true", help="Rebuild insights.json and quotes.md for all stored video artifacts under youtube-db/videos/.")
+    parser.add_argument("--feedback", default=None, help="Append chat-style feedback, e.g. 'W1 down indexing_saturated; W3 promote'.")
+    parser.add_argument("--feedback-file", type=Path, default=None, help="Append feedback commands from a text file.")
+    parser.add_argument("--serve-review", action="store_true", help="Serve the local clickable review UI for --date.")
+    parser.add_argument("--review-host", default=DEFAULT_REVIEW_HOST)
+    parser.add_argument("--review-port", type=int, default=DEFAULT_REVIEW_PORT)
     parser.add_argument("--allow-transcript-fallback", action="store_true", default=None)
     parser.add_argument("--no-transcript-fallback", action="store_false", dest="allow_transcript_fallback")
     return parser.parse_args(argv)
@@ -1598,11 +1873,21 @@ def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv or sys.argv[1:])
     repo_root = args.repo_root.resolve()
     load_env(args.env_file or repo_root / "scripts" / ".env")
-    config = load_config(args.config)
-    channels = channel_configs(config)
     ensure_layout(args.db_dir)
     aliases_file = args.aliases_file or args.db_dir / "config" / "aliases.json"
     stock_aliases = merge_aliases(load_stock_aliases(repo_root), load_aliases_file(aliases_file))
+
+    if args.feedback or args.feedback_file:
+        feedback_text = args.feedback or ""
+        if args.feedback_file:
+            feedback_text = "\n".join([feedback_text, args.feedback_file.read_text(encoding="utf-8")]).strip()
+        count = apply_feedback_text(args.db_dir, args.date, feedback_text)
+        log_progress(f"feedback saved count={count} path={feedback_path(args.db_dir)}")
+        return 0
+
+    if args.serve_review:
+        serve_review(args.db_dir, args.date, args.review_host, args.review_port)
+        return 0
 
     if args.refresh_quotes:
         summary = refresh_all_quotes(args.db_dir, stock_aliases)
@@ -1611,6 +1896,9 @@ def main(argv: list[str] | None = None) -> int:
             f"refreshed={summary['refreshed']} skipped={summary['skipped']} failed={summary['failed']}"
         )
         return 0
+
+    config = load_config(args.config)
+    channels = channel_configs(config)
 
     api_key = os.environ.get("YOUTUBE_API_KEY")
     if not api_key:
