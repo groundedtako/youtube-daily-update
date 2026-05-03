@@ -149,12 +149,19 @@ class YouTubeMonitorTests(unittest.TestCase):
         )
         self.assertEqual(mentions["mapped"], [{"symbol": "AMZN", "matched_aliases": ["Amazon"]}])
 
-    def test_common_entity_aliases_detect_advantest_from_title(self) -> None:
-        mentions = ym.extract_entity_mentions(
+    def test_title_entity_inference_uses_unmapped_ticker_for_title_subject(self) -> None:
+        mentions = ym.infer_title_entity_mentions(
             "Advantest Is Up 450% — Here's What the Valuation Says Now",
+            "",
+            {"mapped": [{"symbol": "AMD", "matched_aliases": ["AMD"]}], "unmapped_symbols": ["ATEYY"]},
             ym.COMMON_ENTITY_ALIASES,
         )
-        self.assertEqual(mentions["mapped"], [{"symbol": "ADVANTEST", "matched_aliases": ["Advantest"]}])
+        self.assertEqual(mentions["mapped"], [{"symbol": "ATEYY", "matched_aliases": ["Advantest"]}])
+
+    def test_description_ticker_aliases_map_company_name_to_ticker(self) -> None:
+        aliases = ym.extract_ticker_aliases_from_text("Coverage: Advantest (OTCMKTS: ATEYY), Teradyne (NASDAQ: TER).")
+        self.assertIn("Advantest", aliases["ATEYY"])
+        self.assertIn("Teradyne", aliases["TER"])
 
     def test_load_aliases_file_accepts_generic_entities(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -276,6 +283,13 @@ Medium — useful if this is not already in your base rate.
             "This is investable because it separates durable business quality from stale market timing.",
         )
 
+    def test_concise_summary_section_drops_incomplete_trailing_bullet(self) -> None:
+        summary = """## Investment Relevance
+- Amazon — durable winner.
+- C Limited (
+"""
+        self.assertEqual(ym.concise_summary_section(summary, "Investment Relevance"), "- Amazon — durable winner.")
+
     def test_decision_lens_summary_falls_back_when_missing(self) -> None:
         self.assertIn(
             "No separate decision-lens section",
@@ -314,6 +328,13 @@ Medium — useful if this is not already in your base rate.
 
         self.assertEqual(ym.concise_core_take(summary, max_chars=None), long_text)
         self.assertEqual(ym.concise_summary_bullets(summary, "Key Insights", max_chars=None), [long_text])
+
+    def test_review_html_links_timestamp_references(self) -> None:
+        item = {"source_url": "https://www.youtube.com/watch?v=abc123XYZ", "insight_url": "https://example.com"}
+        rendered = ym.render_rich_review_text("- Etsy failed ([15:36–16:10]).", item)
+
+        self.assertIn('href="https://www.youtube.com/watch?v=abc123XYZ&amp;t=936s"', rendered)
+        self.assertIn(">15:36–16:10</a>", rendered)
 
     def test_concise_core_take_avoids_full_transcript_fallback(self) -> None:
         transcript_like = "\n".join(["# Source-Grounded Summary", *[f"[{idx}:00] word" for idx in range(500)]])
@@ -425,7 +446,7 @@ Medium — useful if this is not already in your base rate.
                     "channel_handle": "@chipstockinvestor",
                     "source_url": "https://example.com/advantest",
                     "duration_seconds": 900,
-                    "title_entity_mentions": {"mapped": [{"symbol": "ADVANTEST", "matched_aliases": ["Advantest"]}], "unmapped_symbols": []},
+                    "title_entity_mentions": {"mapped": [{"symbol": "ATEYY", "matched_aliases": ["Advantest"]}], "unmapped_symbols": []},
                     "entity_mentions": {"mapped": [{"symbol": "AMD", "matched_aliases": ["AMD"]}], "unmapped_symbols": []},
                 },
                 "output_dir": db_dir / "videos" / "advantest",
@@ -445,8 +466,8 @@ Medium — useful if this is not already in your base rate.
 
             items, _ = ym.build_review_items(db_dir, [result], max_items=1)
 
-            self.assertEqual(items[0]["entities"], ["ADVANTEST"])
-            self.assertEqual(items[0]["title_entities"], ["ADVANTEST"])
+            self.assertEqual(items[0]["entities"], ["ATEYY"])
+            self.assertEqual(items[0]["title_entities"], ["ATEYY"])
             self.assertEqual(items[0]["all_entities"], ["AMD", "NVDA"])
 
     def test_parse_feedback_text_accepts_chat_commands(self) -> None:

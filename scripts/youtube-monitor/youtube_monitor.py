@@ -43,7 +43,6 @@ DEFAULT_REVIEW_PORT = 8765
 COMMON_ENTITY_ALIASES = {
     "AAPL": ["Apple"],
     "AMZN": ["Amazon"],
-    "ADVANTEST": ["Advantest"],
     "GOOGL": ["Alphabet", "Google"],
     "META": ["Meta", "Facebook"],
     "MSFT": ["Microsoft"],
@@ -446,7 +445,8 @@ def load_result_from_artifact(
     except (OSError, json.JSONDecodeError):
         return None
 
-    metadata["title_entity_mentions"] = extract_entity_mentions(str(metadata.get("title") or ""), stock_aliases)
+    existing_entity_mentions = metadata.get("entity_mentions", {})
+    metadata["description_ticker_aliases"] = extract_ticker_aliases_from_text(str(metadata.get("description") or ""))
     mention_text_parts: list[str] = [str(metadata.get("title") or ""), str(metadata.get("channel") or ""), summary]
     transcript_file = metadata.get("transcript_file")
     if transcript_file:
@@ -456,7 +456,17 @@ def load_result_from_artifact(
                 mention_text_parts.append(transcript_path.read_text(encoding="utf-8", errors="replace"))
             except OSError:
                 pass
-    metadata["entity_mentions"] = extract_entity_mentions("\n".join(mention_text_parts), stock_aliases)
+    artifact_aliases = merge_aliases(stock_aliases, metadata["description_ticker_aliases"])
+    metadata["entity_mentions"] = merge_entity_mentions(
+        existing_entity_mentions,
+        extract_entity_mentions("\n".join(mention_text_parts), artifact_aliases),
+    )
+    metadata["title_entity_mentions"] = infer_title_entity_mentions(
+        str(metadata.get("title") or ""),
+        str(metadata.get("description") or ""),
+        metadata["entity_mentions"],
+        stock_aliases,
+    )
 
     transcript_file = metadata.get("transcript_file")
     raw_vtt = metadata.get("raw_vtt")
@@ -964,6 +974,39 @@ def merge_aliases(*sources: dict[str, list[str]]) -> dict[str, list[str]]:
     return normalized
 
 
+TICKER_EXCHANGE_PATTERN = re.compile(
+    r"\b(?:NASDAQ|NYSE|NYSEARCA|OTCMKTS|OTC|AMEX|LON|TSX|TSE|ASX|HKEX)\s*:\s*([A-Z0-9.]{1,8})\b"
+)
+COMPANY_TICKER_PATTERN = re.compile(
+    r"(?P<company>[A-Z][A-Za-z0-9&.,'’ -]{1,80}?)\s*"
+    r"\((?:(?:NASDAQ|NYSE|NYSEARCA|OTCMKTS|OTC|AMEX|LON|TSX|TSE|ASX|HKEX)\s*:\s*)?"
+    r"(?P<symbol>[A-Z0-9.]{1,8})\)"
+)
+
+
+def clean_company_alias(value: str) -> str:
+    cleaned = re.sub(r"\b(?:stock|shares|ticker|adr|ads)\b", "", value, flags=re.IGNORECASE)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip(" -–—:,.()[]")
+    return cleaned
+
+
+def extract_ticker_aliases_from_text(text: str) -> dict[str, list[str]]:
+    aliases: dict[str, list[str]] = {}
+    if not text:
+        return aliases
+    for match in COMPANY_TICKER_PATTERN.finditer(text):
+        symbol = match.group("symbol").replace(".", "-").upper()
+        company = clean_company_alias(match.group("company"))
+        if not company or company.isupper() or symbol in {"CEO", "CFO", "EPS", "ETF", "USA"}:
+            continue
+        aliases.setdefault(symbol, [symbol])
+        aliases[symbol].append(company)
+    for symbol in TICKER_EXCHANGE_PATTERN.findall(text):
+        normalized = symbol.replace(".", "-").upper()
+        aliases.setdefault(normalized, [normalized])
+    return {symbol: sorted(set(values), key=str.casefold) for symbol, values in aliases.items()}
+
+
 def alias_pattern(alias: str) -> re.Pattern[str]:
     escaped = re.escape(alias)
     if re.fullmatch(r"[A-Z]{1,6}", alias):
@@ -1038,6 +1081,61 @@ def extract_entity_mentions(text: str, aliases: dict[str, list[str]]) -> dict[st
     raw_symbols.update(re.findall(r"\(([A-Z]{2,6})\)", text))
     unmapped = sorted(symbol for symbol in raw_symbols if symbol not in known_symbols and symbol not in common_acronyms)
     return {"mapped": mapped, "unmapped_symbols": unmapped}
+
+
+def merge_entity_mentions(*sources: dict[str, Any]) -> dict[str, Any]:
+    mapped_by_symbol: dict[str, set[str]] = {}
+    unmapped: set[str] = set()
+    for source in sources:
+        for item in source.get("mapped", []):
+            symbol = str(item.get("symbol") or "").strip().upper()
+            if not symbol:
+                continue
+            mapped_by_symbol.setdefault(symbol, set()).update(str(alias) for alias in item.get("matched_aliases", []) if str(alias).strip())
+        unmapped.update(str(symbol).strip().upper() for symbol in source.get("unmapped_symbols", []) if str(symbol).strip())
+    unmapped -= set(mapped_by_symbol)
+    return {
+        "mapped": [
+            {"symbol": symbol, "matched_aliases": sorted(aliases, key=str.casefold)}
+            for symbol, aliases in sorted(mapped_by_symbol.items())
+        ],
+        "unmapped_symbols": sorted(unmapped),
+    }
+
+
+def title_subject_candidates(title: str) -> list[str]:
+    first_segment = re.split(r"\s+[—|-]\s+|:", title, maxsplit=1)[0]
+    patterns = [
+        r"^(?P<name>[A-Z][A-Za-z0-9&.'’ ]+?)\s+(?:is|was|stock|shares|earnings|valuation|reported|reports)\b",
+        r"^(?:why|how|what)\s+(?:you\s+)?(?:would\s+have\s+)?(?:missed\s+)?(?P<name>[A-Z][A-Za-z0-9&.'’ ]+?)\b",
+        r"^(?P<name>[A-Z][A-Za-z0-9&.'’ ]{2,})$",
+    ]
+    candidates: list[str] = []
+    for pattern in patterns:
+        match = re.search(pattern, first_segment, re.IGNORECASE)
+        if not match:
+            continue
+        candidate = clean_company_alias(match.group("name"))
+        if candidate and len(candidate.split()) <= 4:
+            candidates.append(candidate)
+    return sorted(set(candidates), key=len)
+
+
+def infer_title_entity_mentions(
+    title: str,
+    description: str,
+    entity_mentions: dict[str, Any],
+    aliases: dict[str, list[str]],
+) -> dict[str, Any]:
+    description_aliases = extract_ticker_aliases_from_text(description)
+    title_mentions = extract_entity_mentions(title, merge_aliases(aliases, description_aliases))
+    if title_mentions.get("mapped") or title_mentions.get("unmapped_symbols"):
+        return title_mentions
+    unmapped = list(entity_mentions.get("unmapped_symbols", []))
+    candidates = title_subject_candidates(title)
+    if len(unmapped) == 1 and candidates:
+        return {"mapped": [{"symbol": unmapped[0], "matched_aliases": [candidates[0]]}], "unmapped_symbols": []}
+    return title_mentions
 
 
 def mentioned_symbols(entity_mentions: dict[str, Any]) -> list[str]:
@@ -1294,7 +1392,8 @@ def process_video(
     summary_path = out_dir / "summary.md"
     summary = ""
     insights: list[dict[str, Any]] = []
-    title_entity_mentions = extract_entity_mentions(video.title, stock_aliases)
+    description_ticker_aliases = extract_ticker_aliases_from_text(video.description)
+    video_aliases = merge_aliases(stock_aliases, description_ticker_aliases)
     entity_mentions: dict[str, Any] = {"mapped": [], "unmapped_symbols": []}
     if transcript_status != "missing":
         if stage_callback:
@@ -1307,7 +1406,7 @@ def process_video(
             mention_text_parts.append("\n".join(cue.text for cue in cues))
         else:
             mention_text_parts.append(transcript_path.read_text(encoding="utf-8", errors="replace"))
-        entity_mentions = extract_entity_mentions("\n".join(mention_text_parts), stock_aliases)
+        entity_mentions = extract_entity_mentions("\n".join(mention_text_parts), video_aliases)
         insights = extract_insights(video, cues, entity_mentions, summary)
     else:
         summary_path.write_text(
@@ -1318,6 +1417,7 @@ def process_video(
     metadata = {
         "video_id": video.video_id,
         "title": video.title,
+        "description": video.description,
         "channel": video.channel_title,
         "channel_handle": video.channel_handle,
         "published_at": video.published_at,
@@ -1325,7 +1425,13 @@ def process_video(
         "source_url": video.url,
         "duration_seconds": video.duration_seconds,
         "duration": format_duration(video.duration_seconds),
-        "title_entity_mentions": title_entity_mentions,
+        "description_ticker_aliases": description_ticker_aliases,
+        "title_entity_mentions": infer_title_entity_mentions(
+            video.title,
+            video.description,
+            entity_mentions,
+            stock_aliases,
+        ),
         "entity_mentions": entity_mentions,
         "transcript_status": transcript_status,
         "raw_vtt": vtt_path.name if vtt_path else None,
@@ -1364,6 +1470,7 @@ def write_quotes(path: Path, video: VideoCandidate, insights: list[dict[str, Any
 
 
 def strip_inline_markdown(text: str) -> str:
+    text = re.sub(r"\[([^\]]+)\]\([^)]+\)", r"\1", text)
     text = re.sub(r"\*\*([^*]+)\*\*", r"\1", text)
     text = re.sub(r"\*([^*]+)\*", r"\1", text)
     text = re.sub(r"`([^`]+)`", r"\1", text)
@@ -1414,7 +1521,14 @@ def concise_core_take(summary: str, max_chars: int | None = 180) -> str:
 
 def concise_summary_section(summary: str, heading: str, max_chars: int | None = 360) -> str:
     lines = extract_summary_section(summary, heading)
-    text = strip_inline_markdown(" ".join(lines))
+    while lines and (
+        lines[-1].strip().endswith(("(", "[", "—", "-"))
+        or lines[-1].count("(") > lines[-1].count(")")
+        or lines[-1].count("[") > lines[-1].count("]")
+    ):
+        lines = lines[:-1]
+    separator = "\n" if any(re.match(r"^\s*(?:[-*]|\d+[.)])\s+", line) for line in lines) else " "
+    text = strip_inline_markdown(separator.join(lines))
     if not text:
         return ""
     if max_chars is None or len(text) <= max_chars:
@@ -1467,6 +1581,66 @@ def quote_highlights(insights: list[dict[str, Any]], max_items: int = 2, max_cha
             }
         )
     return highlights
+
+
+TIMESTAMP_REF_PATTERN = re.compile(
+    r"\[?(?P<start>\d{1,2}:\d{2}(?::\d{2})?)(?:\s*[–-]\s*(?P<end>\d{1,2}:\d{2}(?::\d{2})?))?\]?"
+)
+
+
+def timestamp_url_for_item(item: dict[str, Any], timestamp: str) -> str:
+    try:
+        seconds = timestamp_to_seconds(timestamp)
+    except (ValueError, IndexError):
+        return str(item.get("source_url") or item.get("insight_url") or "")
+    source_url = str(item.get("source_url") or item.get("insight_url") or "")
+    video_id_match = re.search(r"(?:v=|youtu\.be/)([A-Za-z0-9_-]{6,})", source_url)
+    if video_id_match:
+        return youtube_url(video_id_match.group(1), seconds)
+    separator = "&" if "?" in source_url else "?"
+    return f"{source_url}{separator}t={seconds}s" if source_url else ""
+
+
+def render_text_with_timestamp_links(text: str, item: dict[str, Any]) -> str:
+    rendered: list[str] = []
+    last_end = 0
+    for match in TIMESTAMP_REF_PATTERN.finditer(text):
+        start = match.group("start")
+        end = match.group("end")
+        rendered.append(html.escape(text[last_end : match.start()]))
+        label = f"{start}–{end}" if end else start
+        url = timestamp_url_for_item(item, start)
+        if url:
+            rendered.append(f'<a href="{html.escape(url)}">{html.escape(label)}</a>')
+        else:
+            rendered.append(html.escape(label))
+        last_end = match.end()
+    rendered.append(html.escape(text[last_end:]))
+    return "".join(rendered)
+
+
+def render_rich_review_text(text: str, item: dict[str, Any]) -> str:
+    lines = [line.strip() for line in str(text or "").splitlines() if line.strip()]
+    if not lines:
+        return "<p>No text available.</p>"
+    html_parts: list[str] = []
+    list_items: list[str] = []
+
+    def flush_list() -> None:
+        nonlocal list_items
+        if list_items:
+            html_parts.append("<ul>" + "".join(list_items) + "</ul>")
+            list_items = []
+
+    for line in lines:
+        bullet = re.sub(r"^\s*(?:[-*]|\d+[.)])\s+", "", line).strip()
+        if bullet != line:
+            list_items.append(f"<li>{render_text_with_timestamp_links(bullet, item)}</li>")
+            continue
+        flush_list()
+        html_parts.append(f"<p>{render_text_with_timestamp_links(line, item)}</p>")
+    flush_list()
+    return "\n".join(html_parts)
 
 
 def compact_artifact_links(rel_dir: Path, transcript_file: str | None) -> str:
@@ -1937,7 +2111,9 @@ def render_review_html(
             preference_badge = f"Preference: downranked {preference_score:+.1f}"
         key_insights = item.get("key_insights") or []
         quote_items = item.get("quote_highlights") or []
-        key_insights_html = "\n".join(f"<li>{html.escape(str(insight))}</li>" for insight in key_insights) or "<li>No extracted key insights available.</li>"
+        key_insights_html = "\n".join(
+            f"<li>{render_text_with_timestamp_links(str(insight), item)}</li>" for insight in key_insights
+        ) or "<li>No extracted key insights available.</li>"
         quotes_html = "\n".join(
             f"<blockquote><p>\"{html.escape(str(quote.get('text', '')))}\"</p>"
             f"<footer><a href=\"{html.escape(str(quote.get('url', item['insight_url'])))}\">"
@@ -1951,12 +2127,12 @@ def render_review_html(
   <h2>{html.escape(item['title'])}</h2>
   <section>
     <h3>Summary Judgment</h3>
-    <p>{html.escape(core_take)}</p>
+    {render_rich_review_text(core_take, item)}
   </section>
   <div class="detail-grid">
     <section class="panel panel-opinion">
       <h3>Highlighted Opinion</h3>
-      <p>{html.escape(relevance)}</p>
+      {render_rich_review_text(relevance, item)}
     </section>
     <section class="panel">
       <h3>Key Insights</h3>
@@ -1968,12 +2144,12 @@ def render_review_html(
     </section>
     <section class="panel">
       <h3>Watchworthiness</h3>
-      <p>{html.escape(watch_worthiness)}</p>
+      {render_rich_review_text(watch_worthiness, item)}
     </section>
   </div>
   <section class="evidence">
     <h3>Primary Evidence</h3>
-    <p>{html.escape(item['claim'])}</p>
+    {render_rich_review_text(item['claim'], item)}
   </section>
   <p><a href="{html.escape(item['insight_url'])}">Open source @ {html.escape(item.get('timestamp', 'start'))}</a></p>
   <input aria-label="reason" placeholder="optional reason, e.g. indexing_saturated" />

@@ -20,8 +20,10 @@ Include a timestamp from the transcript when available. Prioritize the most
 decision-relevant insights, not the first facts mentioned.
 
 ## Investment Relevance
-Call out every company, ticker, industry, technology, or macro theme mentioned.
-If no company or ticker is discussed, say so and explain the non-company insight.
+Write 2-4 concise paragraphs, not a long raw entity list. Mention the primary
+company/ticker/theme first, then only the secondary names that change the
+decision. If no company or ticker is discussed, say so and explain the
+non-company insight.
 Separate durable business insights from stale valuation or market-timing claims.
 For investment-related content, include an explicit view on what the video
 changes, confirms, or fails to change for an investor. Highlight the speaker's
