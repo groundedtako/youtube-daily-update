@@ -13,6 +13,7 @@ import youtube_monitor as monitor
 SCRIPT_DIR = Path(__file__).resolve().parent
 REPO_ROOT = SCRIPT_DIR.parents[1]
 DEFAULT_DB_DIR = REPO_ROOT / "youtube-db"
+DEFAULT_CONFIG = DEFAULT_DB_DIR / "config" / "channels.json"
 DEFAULT_APP_PORT = 0
 
 
@@ -32,6 +33,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Launch the local YouTube review app.")
     parser.add_argument("date", nargs="?", help="Optional review date. Omit to open the unreviewed-date dashboard.")
     parser.add_argument("--db-dir", type=Path, default=DEFAULT_DB_DIR)
+    parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG, help="Channel config to edit when blacklisting channels.")
     parser.add_argument("--host", default=monitor.DEFAULT_REVIEW_HOST)
     parser.add_argument("--port", type=int, default=DEFAULT_APP_PORT, help="Port to bind. Defaults to 0, which auto-selects a free port.")
     parser.add_argument("--no-open", action="store_true", help="Start the server without opening a browser.")
@@ -43,7 +45,7 @@ def main(argv: list[str] | None = None) -> int:
     run_date = args.date
     print(f"Review date: {run_date or 'dashboard'}")
     print("Press Ctrl+C to stop.")
-    monitor.serve_review(args.db_dir, run_date, args.host, args.port, open_browser=not args.no_open)
+    monitor.serve_review(args.db_dir, run_date, args.host, args.port, open_browser=not args.no_open, config_path=args.config)
     return 0
 
 

@@ -40,6 +40,16 @@ MIN_VIDEO_DURATION_SECONDS = 180
 FEEDBACK_ACTIONS = {"up", "down", "known", "promote"}
 DEFAULT_REVIEW_HOST = "127.0.0.1"
 DEFAULT_REVIEW_PORT = 8765
+COMMON_ENTITY_ALIASES = {
+    "AAPL": ["Apple"],
+    "AMZN": ["Amazon"],
+    "GOOGL": ["Alphabet", "Google"],
+    "META": ["Meta", "Facebook"],
+    "MSFT": ["Microsoft"],
+    "NFLX": ["Netflix"],
+    "NVDA": ["Nvidia", "NVIDIA"],
+    "TSLA": ["Tesla"],
+}
 
 
 class MonitorError(RuntimeError):
@@ -194,6 +204,23 @@ def channel_configs(config: dict[str, Any]) -> list[ChannelConfig]:
             )
         )
     return channels
+
+
+def add_channel_to_blacklist(config_path: Path, channel_handle: str) -> str:
+    config = load_config(config_path)
+    normalized_target = normalize_channel_handle(channel_handle)
+    if not normalized_target:
+        raise MonitorError("Cannot blacklist an empty channel handle.")
+    blacklist = [
+        str(handle)
+        for handle in config.get("blacklist_channels", [])
+        if isinstance(handle, str) and handle.strip()
+    ]
+    if normalized_target not in {normalize_channel_handle(handle) for handle in blacklist}:
+        blacklist.append(channel_handle if channel_handle.startswith("@") else f"@{channel_handle}")
+    config["blacklist_channels"] = blacklist
+    write_json(config_path, config)
+    return blacklist[-1]
 
 
 def normalize_channel_handle(handle: str) -> str:
@@ -1336,7 +1363,15 @@ def strip_inline_markdown(text: str) -> str:
     text = re.sub(r"\*\*([^*]+)\*\*", r"\1", text)
     text = re.sub(r"\*([^*]+)\*", r"\1", text)
     text = re.sub(r"`([^`]+)`", r"\1", text)
-    return text.strip()
+    return html.unescape(text).strip()
+
+
+def clean_review_text(text: str) -> str:
+    cleaned = html.unescape(strip_inline_markdown(text))
+    cleaned = re.sub(r"(?m)^\s*>+\s*", "", cleaned)
+    cleaned = re.sub(r"\s*>>\s*", " ", cleaned)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+    return cleaned
 
 
 def extract_summary_section(summary: str, heading: str) -> list[str]:
@@ -1357,29 +1392,33 @@ def extract_summary_section(summary: str, heading: str) -> list[str]:
     return section_lines
 
 
-def concise_core_take(summary: str, max_chars: int = 180) -> str:
+def concise_core_take(summary: str, max_chars: int | None = 180) -> str:
     lines = extract_summary_section(summary, "Core Take")
+    using_fallback = False
     if not lines:
+        using_fallback = True
         lines = [line.strip() for line in summary.splitlines() if line.strip() and not line.lstrip().startswith("#")]
     text = strip_inline_markdown(" ".join(lines))
     if not text:
         return "No summary generated."
-    if len(text) <= max_chars:
+    if using_fallback and len(text) > 1200:
+        return "No structured Core Take was generated for this artifact; open the linked summary for the full transcript-derived fallback."
+    if max_chars is None or len(text) <= max_chars:
         return text
     return text[: max_chars - 1].rstrip() + "..."
 
 
-def concise_summary_section(summary: str, heading: str, max_chars: int = 360) -> str:
+def concise_summary_section(summary: str, heading: str, max_chars: int | None = 360) -> str:
     lines = extract_summary_section(summary, heading)
     text = strip_inline_markdown(" ".join(lines))
     if not text:
         return ""
-    if len(text) <= max_chars:
+    if max_chars is None or len(text) <= max_chars:
         return text
     return text[: max_chars - 1].rstrip() + "..."
 
 
-def decision_lens_summary(summary: str, max_chars: int = 420) -> str:
+def decision_lens_summary(summary: str, max_chars: int | None = 420) -> str:
     for heading in (
         "Investment Relevance",
         "Research Relevance",
@@ -1393,14 +1432,14 @@ def decision_lens_summary(summary: str, max_chars: int = 420) -> str:
     return "No separate decision-lens section was generated for this artifact; use the judgment and evidence sections."
 
 
-def concise_summary_bullets(summary: str, heading: str, max_items: int = 3, max_chars: int = 220) -> list[str]:
+def concise_summary_bullets(summary: str, heading: str, max_items: int = 3, max_chars: int | None = 220) -> list[str]:
     bullets: list[str] = []
     for line in extract_summary_section(summary, heading):
         cleaned = re.sub(r"^\s*(?:[-*]|\d+[.)])\s+", "", line).strip()
         if not cleaned:
             continue
         text = strip_inline_markdown(cleaned)
-        if len(text) > max_chars:
+        if max_chars is not None and len(text) > max_chars:
             text = text[: max_chars - 1].rstrip() + "..."
         bullets.append(text)
         if len(bullets) >= max_items:
@@ -1408,13 +1447,13 @@ def concise_summary_bullets(summary: str, heading: str, max_items: int = 3, max_
     return bullets
 
 
-def quote_highlights(insights: list[dict[str, Any]], max_items: int = 2, max_chars: int = 220) -> list[dict[str, str]]:
+def quote_highlights(insights: list[dict[str, Any]], max_items: int = 2, max_chars: int | None = 220) -> list[dict[str, str]]:
     highlights: list[dict[str, str]] = []
     for insight in insights[:max_items]:
-        text = strip_inline_markdown(str(insight.get("quote") or insight.get("claim") or "")).strip()
+        text = clean_review_text(str(insight.get("quote") or insight.get("claim") or ""))
         if not text:
             continue
-        if len(text) > max_chars:
+        if max_chars is not None and len(text) > max_chars:
             text = text[: max_chars - 1].rstrip() + "..."
         highlights.append(
             {
@@ -1610,11 +1649,11 @@ def build_review_items(
             "duration_seconds": metadata.get("duration_seconds", 0),
             "artifact_dir": artifact_dir,
             "entities": insight.get("mentioned_entities", []),
-            "core_take": concise_core_take(result.get("summary", ""), max_chars=320),
-            "decision_lens": decision_lens_summary(result.get("summary", ""), max_chars=420),
-            "key_insights": concise_summary_bullets(result.get("summary", ""), "Key Insights", max_items=3),
-            "quote_highlights": quote_highlights(result.get("insights", []), max_items=2),
-            "watch_worthiness": concise_summary_section(result.get("summary", ""), "Watch Worthiness", max_chars=220)
+            "core_take": concise_core_take(result.get("summary", ""), max_chars=None),
+            "decision_lens": decision_lens_summary(result.get("summary", ""), max_chars=None),
+            "key_insights": concise_summary_bullets(result.get("summary", ""), "Key Insights", max_items=4, max_chars=None),
+            "quote_highlights": quote_highlights(result.get("insights", []), max_items=3, max_chars=None),
+            "watch_worthiness": concise_summary_section(result.get("summary", ""), "Watch Worthiness", max_chars=None)
             or "No watchworthiness score was generated for this artifact; future summaries include one.",
             "claim": insight["claim"],
             "timestamp": insight.get("timestamp", ""),
@@ -1875,9 +1914,9 @@ def render_review_html(
         quote_items = item.get("quote_highlights") or []
         key_insights_html = "\n".join(f"<li>{html.escape(str(insight))}</li>" for insight in key_insights) or "<li>No extracted key insights available.</li>"
         quotes_html = "\n".join(
-            f"<blockquote>{html.escape(str(quote.get('text', '')))}"
+            f"<blockquote><p>\"{html.escape(str(quote.get('text', '')))}\"</p>"
             f"<footer><a href=\"{html.escape(str(quote.get('url', item['insight_url'])))}\">"
-            f"{html.escape(str(quote.get('timestamp') or 'source'))}</a></footer></blockquote>"
+            f"Open @ {html.escape(str(quote.get('timestamp') or 'source'))}</a></footer></blockquote>"
             for quote in quote_items
         ) or "<p>No quote highlights available.</p>"
         item_cards.append(
@@ -1918,6 +1957,7 @@ def render_review_html(
     <button data-action="down" title="Preference signal: rank similar videos lower in future briefs.">👎 Less like this</button>
     <button data-action="known" title="Preference signal: useful topic, but already saturated for you.">💤 Already know this</button>
     <button data-action="promote" title="Workflow action: move this item into manual research/follow-up.">🎯 Promote</button>
+    <button class="danger" data-channel-handle="{html.escape(item.get('channel_handle') or item.get('channel') or '')}" data-channel-name="{html.escape(item.get('channel') or '')}" title="Edit channels.json so this channel is skipped in future discovery.">🚫 Blacklist channel</button>
   </div>
   <div class="status"></div>
 </article>
@@ -1951,6 +1991,7 @@ def render_review_html(
     input {{ box-sizing: border-box; width: 100%; padding: 10px; margin: 8px 0 12px; border-radius: 10px; border: 1px solid #555; background: #111; color: #fff; }}
     button {{ margin: 4px 8px 4px 0; padding: 10px 12px; border-radius: 999px; border: 1px solid #444; background: #2a2a2a; color: #fff; cursor: pointer; }}
     button:hover {{ background: #3a3a3a; }}
+    button.danger {{ border-color: #744; color: #ffd8d8; }}
     .status {{ color: #9be28f; min-height: 20px; margin-top: 8px; }}
   </style>
 </head>
@@ -1982,6 +2023,20 @@ document.addEventListener("click", async (event) => {{
   const status = card.querySelector(".status");
   status.textContent = response.ok ? "Saved" : await response.text();
 }});
+document.addEventListener("click", async (event) => {{
+  const button = event.target.closest("button[data-channel-handle]");
+  if (!button) return;
+  const channelName = button.dataset.channelName || button.dataset.channelHandle;
+  if (!window.confirm(`Blacklist channel "${{channelName}}" for future runs?`)) return;
+  const response = await fetch("/blacklist-channel", {{
+    method: "POST",
+    headers: {{ "Content-Type": "application/json" }},
+    body: JSON.stringify({{ channel_handle: button.dataset.channelHandle }})
+  }});
+  const card = button.closest(".card");
+  const status = card.querySelector(".status");
+  status.textContent = response.ok ? "Channel added to blacklist" : await response.text();
+}});
 document.getElementById("complete-review")?.addEventListener("click", async (event) => {{
   const endpoint = event.target.dataset.completeEndpoint;
   const response = await fetch(endpoint, {{ method: "POST" }});
@@ -2006,7 +2061,7 @@ def write_review_html(db_dir: Path, run_date: str, items: list[dict[str, Any]]) 
     return path
 
 
-def make_review_handler(db_dir: Path, fixed_run_date: str | None, base_url: str) -> type[BaseHTTPRequestHandler]:
+def make_review_handler(db_dir: Path, fixed_run_date: str | None, base_url: str, config_path: Path | None = None) -> type[BaseHTTPRequestHandler]:
     class ReviewHandler(BaseHTTPRequestHandler):
         def send_bytes(self, status: int, body: bytes, content_type: str = "text/html; charset=utf-8") -> None:
             self.send_response(status)
@@ -2054,6 +2109,15 @@ def make_review_handler(db_dir: Path, fixed_run_date: str | None, base_url: str)
             feedback_match = re.fullmatch(r"/date/(\d{4}-\d{2}-\d{2})/feedback", path)
             complete_match = re.fullmatch(r"/date/(\d{4}-\d{2}-\d{2})/complete", path)
             try:
+                if path == "/blacklist-channel":
+                    if config_path is None:
+                        raise MonitorError("No channel config path was provided.")
+                    length = int(self.headers.get("Content-Length", "0"))
+                    payload = json.loads(self.rfile.read(length).decode("utf-8"))
+                    added = add_channel_to_blacklist(config_path, str(payload.get("channel_handle", "")))
+                    body = json.dumps({"blacklisted": added}).encode("utf-8")
+                    self.send_bytes(200, body, "application/json; charset=utf-8")
+                    return
                 if feedback_match:
                     length = int(self.headers.get("Content-Length", "0"))
                     payload = json.loads(self.rfile.read(length).decode("utf-8"))
@@ -2087,12 +2151,19 @@ def make_review_handler(db_dir: Path, fixed_run_date: str | None, base_url: str)
     return ReviewHandler
 
 
-def serve_review(db_dir: Path, run_date: str | None, host: str, port: int, open_browser: bool = False) -> None:
+def serve_review(
+    db_dir: Path,
+    run_date: str | None,
+    host: str,
+    port: int,
+    open_browser: bool = False,
+    config_path: Path | None = None,
+) -> None:
     server = ReusableHTTPServer((host, port), BaseHTTPRequestHandler)
     actual_host, actual_port = server.server_address
     base_url = f"http://{actual_host}:{actual_port}/"
     open_url = f"{base_url}date/{run_date}" if run_date else base_url
-    server.RequestHandlerClass = make_review_handler(db_dir, run_date, base_url)
+    server.RequestHandlerClass = make_review_handler(db_dir, run_date, base_url, config_path=config_path)
     log_progress(f"review server {open_url}")
     if open_browser:
         webbrowser.open(open_url)
@@ -2331,7 +2402,7 @@ def main(argv: list[str] | None = None) -> int:
     load_env(args.env_file or repo_root / "scripts" / ".env")
     ensure_layout(args.db_dir)
     aliases_file = args.aliases_file or args.db_dir / "config" / "aliases.json"
-    stock_aliases = merge_aliases(load_stock_aliases(repo_root), load_aliases_file(aliases_file))
+    stock_aliases = merge_aliases(COMMON_ENTITY_ALIASES, load_stock_aliases(repo_root), load_aliases_file(aliases_file))
 
     if args.feedback or args.feedback_file:
         feedback_text = args.feedback or ""
@@ -2342,7 +2413,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.serve_review:
-        serve_review(args.db_dir, args.date, args.review_host, args.review_port)
+        serve_review(args.db_dir, args.date, args.review_host, args.review_port, config_path=args.config)
         return 0
 
     if args.refresh_quotes:

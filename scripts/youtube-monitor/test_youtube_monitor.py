@@ -34,6 +34,17 @@ class YouTubeMonitorTests(unittest.TestCase):
         )
         self.assertEqual([item.handle for item in configs], ["@DwarkeshPatel"])
 
+    def test_add_channel_to_blacklist_updates_config(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "channels.json"
+            ym.write_json(path, {"channels": ["@DrewCohenMoney"], "blacklist_channels": []})
+
+            ym.add_channel_to_blacklist(path, "@DrewCohenMoney")
+
+            config = ym.read_json(path)
+            self.assertEqual(config["blacklist_channels"], ["@DrewCohenMoney"])
+            self.assertEqual(ym.channel_configs(config), [])
+
     def test_prepare_manifest_does_not_rerun_completed_day(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "runs" / "2026-05-02.json"
@@ -130,6 +141,13 @@ class YouTubeMonitorTests(unittest.TestCase):
             ],
         )
         self.assertEqual(mentions["unmapped_symbols"], ["CRWV"])
+
+    def test_common_entity_aliases_detect_amazon_from_title(self) -> None:
+        mentions = ym.extract_entity_mentions(
+            "Why You Would Have Missed Amazon in 2000",
+            ym.COMMON_ENTITY_ALIASES,
+        )
+        self.assertEqual(mentions["mapped"], [{"symbol": "AMZN", "matched_aliases": ["Amazon"]}])
 
     def test_load_aliases_file_accepts_generic_entities(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -273,7 +291,7 @@ Medium — useful if this is not already in your base rate.
         self.assertEqual(
             ym.quote_highlights(
                 [
-                    {"timestamp": "1:00", "quote": "A direct quote.", "url": "https://example.com/1"},
+                    {"timestamp": "1:00", "quote": "&gt;&gt; A direct &gt;&gt; quote.", "url": "https://example.com/1"},
                     {"timestamp": "2:00", "claim": "A fallback claim.", "url": "https://example.com/2"},
                 ]
             ),
@@ -282,6 +300,18 @@ Medium — useful if this is not already in your base rate.
                 {"timestamp": "2:00", "text": "A fallback claim.", "url": "https://example.com/2"},
             ],
         )
+
+    def test_review_text_helpers_do_not_truncate_when_disabled(self) -> None:
+        long_text = " ".join(["long"] * 120)
+        summary = f"## Core Take\n{long_text}\n\n## Key Insights\n- {long_text}"
+
+        self.assertEqual(ym.concise_core_take(summary, max_chars=None), long_text)
+        self.assertEqual(ym.concise_summary_bullets(summary, "Key Insights", max_chars=None), [long_text])
+
+    def test_concise_core_take_avoids_full_transcript_fallback(self) -> None:
+        transcript_like = "\n".join(["# Source-Grounded Summary", *[f"[{idx}:00] word" for idx in range(500)]])
+
+        self.assertIn("No structured Core Take", ym.concise_core_take(transcript_like, max_chars=None))
 
     def test_preference_feedback_downranks_similar_items(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -449,6 +479,7 @@ Medium — useful if this is not already in your base rate.
             self.assertIn("Workflow action", html)
             self.assertIn("Highlighted Opinion", html)
             self.assertIn("Key Quotes", html)
+            self.assertIn("Blacklist channel", html)
             self.assertIn("file://", html)
 
     def test_apply_feedback_text_enriches_jsonl_record(self) -> None:

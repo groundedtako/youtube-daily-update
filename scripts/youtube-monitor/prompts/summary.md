@@ -9,9 +9,10 @@ ad, merch, intro, outro, or subscription material.
 Return concise Markdown with these sections:
 
 ## Core Take
-A 2-4 sentence judgment of the main argument. Be opinionated but grounded:
+A 3-5 sentence judgment of the main argument. Be opinionated but grounded:
 state whether the video is actionable, stale, consensus, contrarian, or mainly
-educational. Do not merely restate facts; explain the implication.
+educational. Do not merely restate facts; explain the implication and what
+would make the conclusion wrong.
 
 ## Key Insights
 3-8 bullets. Each bullet must be a specific claim rooted in the transcript.
@@ -25,6 +26,8 @@ Separate durable business insights from stale valuation or market-timing claims.
 For investment-related content, include an explicit view on what the video
 changes, confirms, or fails to change for an investor. Highlight the speaker's
 opinion or angle separately from hard facts when that distinction matters.
+Be direct: say whether the insight looks investable, already priced/consensus,
+too generic, or worth a manual research follow-up.
 
 For non-investing workflows, replace this section with the relevant decision
 lens, such as Research Relevance, Product Relevance, Policy Relevance, or

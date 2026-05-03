@@ -181,10 +181,13 @@ scripts/youtube-monitor/run.sh \
 - Interrupted runs resume pending or failed manifest items.
 - Quote extraction groups adjacent summary timestamps into coherent quote blocks.
 - Daily review cards get stable IDs such as `W1` and use a larger decision layout: summary judgment, highlighted opinion, key insights, key quotes, primary evidence, and feedback actions.
+- Review cards intentionally avoid truncating summary judgment, key insights, decision lens, and quote highlights.
+- Review cards include `Blacklist channel`, which edits `youtube-db/config/channels.json` by adding the channel to `blacklist_channels` for future discovery runs.
 - The review app opens a dashboard of unreviewed dates; submitting a date review records it in `youtube-db/review/reviewed_dates.json` and hides it from the dashboard.
 - Future review queues read `youtube-db/review/feedback.jsonl` and adjust ranking with lightweight similarity: `More like this` boosts similar items, while `Less like this` and `Already know this` downrank similar items. `Promote` remains a workflow action and does not boost similar content.
 - Review actions separate preference from workflow: `More like this`, `Less like this`, and `Already know this` tune future ranking; `Promote` means manual research follow-up.
 - Summaries are intentionally opinionated within transcript evidence: the default prompt asks what the video changes, confirms, or fails to change for an investor.
+- Common mega-cap entities such as Amazon, Apple, Google/Alphabet, Microsoft, Meta, Nvidia, Netflix, and Tesla are recognized even if they are not present in a local `Stocks/` folder.
 - Failed transcript or summary attempts are recorded in the daily brief.
 
 ## Codex Skill
