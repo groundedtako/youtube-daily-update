@@ -1556,7 +1556,8 @@ def render_review_html(run_date: str, items: list[dict[str, Any]]) -> str:
 <body>
 <main>
   <h1>YouTube Review — {html.escape(run_date)}</h1>
-  <p>Buttons require the local review server. Chat fallback works with commands like <code>W1 down indexing_saturated</code>.</p>
+  <p><strong>Persistence:</strong> buttons save only when this page is opened from the local review server at <code>http://127.0.0.1:8765/</code>. A <code>file://</code> tab is a static preview.</p>
+  <p>Start the app with <code>scripts/youtube-monitor/run.sh --date {html.escape(run_date)} --serve-review</code>. Chat fallback works with commands like <code>W1 down indexing_saturated</code>.</p>
   {cards}
 </main>
 <script>
@@ -1658,6 +1659,7 @@ def write_daily_report(
     review_items, remaining_review_items = build_review_items(db_dir, processed_results)
     state_path = write_review_state(db_dir, run_date, review_items)
     html_path = write_review_html(db_dir, run_date, review_items)
+    review_server_url = f"http://{DEFAULT_REVIEW_HOST}:{DEFAULT_REVIEW_PORT}/"
     lines = [
         "- [ ] read",
         "",
@@ -1672,10 +1674,11 @@ def write_daily_report(
         f"- Videos skipped: {len(skipped)}",
         f"- Videos failed: {len(failures)}",
         f"- Source-backed quote candidates: {sum(len(item['insights']) for item in processed_results)}",
-        f"- Review UI: `{html_path.relative_to(db_dir)}`",
+        f"- Review app: run `scripts/youtube-monitor/run.sh --date {run_date} --serve-review`, then open {review_server_url}",
+        f"- Static review preview: `{html_path.relative_to(db_dir)}`",
         f"- Review state: `{state_path.relative_to(db_dir)}`",
         "",
-        "Use the video index for triage; reply with compact feedback such as `W1 up`, `W2 down indexing_saturated`, `W3 known`, or `W4 promote`.",
+        "Use the video index for triage; save feedback with the review app or reply with compact commands such as `W1 up`, `W2 down indexing_saturated`, `W3 known`, or `W4 promote`.",
         "",
     ]
 

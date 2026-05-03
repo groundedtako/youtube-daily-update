@@ -52,6 +52,11 @@ scripts/youtube-monitor/run.sh --lookback-count 3 --workers 5 --dry-run
 scripts/youtube-monitor/run.sh --lookback-count 3 --workers 5 --force
 ```
 
+For clickable feedback, `--serve-review` is the lightweight GUI mode. It serves
+the review page at `http://127.0.0.1:8765/` and writes button clicks to
+`youtube-db/review/feedback.jsonl`. Opening `youtube-db/review/YYYY-MM-DD.html`
+directly as `file://` is only a static preview.
+
 When the skill is installed outside the target research repo, pass:
 
 ```bash
@@ -81,6 +86,7 @@ Read `youtube-db/daily/YYYY-MM-DD.md` after a run and report:
 - detected entity/topic matches, or stock-note matches for investing workflows
 - transcript failures
 - Review Queue highlights
+- review app command or served URL when feedback is expected
 - daily brief path
 
 When the user gives watchworthiness feedback, parse natural commands from the daily brief review IDs:

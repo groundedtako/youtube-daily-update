@@ -286,10 +286,13 @@ This is the useful daily brief sentence that should appear.
 
             daily = daily_path.read_text(encoding="utf-8")
             self.assertIn("**W1**", daily)
+            self.assertIn("Review app: run `scripts/youtube-monitor/run.sh --date 2026-05-02 --serve-review`", daily)
             self.assertIn("`W1 up | W1 down <reason> | W1 known | W1 promote`", daily)
             state = json.loads((db_dir / "review" / "2026-05-02.json").read_text(encoding="utf-8"))
             self.assertEqual(state["items"][0]["review_id"], "W1")
-            self.assertIn("More like this", (db_dir / "review" / "2026-05-02.html").read_text(encoding="utf-8"))
+            html = (db_dir / "review" / "2026-05-02.html").read_text(encoding="utf-8")
+            self.assertIn("More like this", html)
+            self.assertIn("file://", html)
 
     def test_apply_feedback_text_enriches_jsonl_record(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

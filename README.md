@@ -142,6 +142,10 @@ Use the optional local click UI:
 scripts/youtube-monitor/run.sh --date 2026-05-02 --serve-review
 ```
 
+Then open `http://127.0.0.1:8765/`. The generated
+`youtube-db/review/YYYY-MM-DD.html` file is a static preview; button clicks only
+persist while the local review server is running.
+
 Discovery-only dry run:
 
 ```bash
