@@ -17,6 +17,7 @@ import re
 import shutil
 import subprocess
 import sys
+import webbrowser
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
@@ -1573,7 +1574,12 @@ def apply_feedback_text(db_dir: Path, run_date: str, text: str) -> int:
     return append_feedback_records(db_dir, run_date, parse_feedback_text(text))
 
 
-def render_review_html(run_date: str, items: list[dict[str, Any]]) -> str:
+class ReusableHTTPServer(HTTPServer):
+    allow_reuse_address = True
+
+
+def render_review_html(run_date: str, items: list[dict[str, Any]], base_url: str | None = None) -> str:
+    app_url = base_url or f"http://{DEFAULT_REVIEW_HOST}:{DEFAULT_REVIEW_PORT}/"
     item_cards = []
     for item in items:
         entities = ", ".join(item.get("entities", [])) or "No entity detected"
@@ -1666,7 +1672,7 @@ def render_review_html(run_date: str, items: list[dict[str, Any]]) -> str:
 <body>
 <main>
   <h1>YouTube Review — {html.escape(run_date)}</h1>
-  <p><strong>Persistence:</strong> buttons save only when this page is opened from the local review server at <code>http://127.0.0.1:8765/</code>. A <code>file://</code> tab is a static preview.</p>
+  <p><strong>Persistence:</strong> buttons save only when this page is opened from the local review server at <code>{html.escape(app_url)}</code>. A <code>file://</code> tab is a static preview.</p>
   <p>Start the app with <code>scripts/youtube-monitor/run.sh --date {html.escape(run_date)} --serve-review</code>. Chat fallback works with commands like <code>W1 down indexing_saturated</code>.</p>
   <p><strong>Actions:</strong> <em>More/Less/Known</em> are ranking-preference signals for future briefs. <em>Promote</em> is an explicit workflow action: this deserves manual research follow-up, not merely more similar videos.</p>
   {cards}
@@ -1702,10 +1708,7 @@ def write_review_html(db_dir: Path, run_date: str, items: list[dict[str, Any]]) 
     return path
 
 
-def serve_review(db_dir: Path, run_date: str, host: str, port: int) -> None:
-    state = load_review_state(db_dir, run_date)
-    html_body = render_review_html(run_date, state.get("items", [])).encode("utf-8")
-
+def make_review_handler(db_dir: Path, run_date: str, state: dict[str, Any], html_body: bytes) -> type[BaseHTTPRequestHandler]:
     class ReviewHandler(BaseHTTPRequestHandler):
         def do_GET(self) -> None:
             if self.path in ("/", f"/{run_date}.html"):
@@ -1752,8 +1755,19 @@ def serve_review(db_dir: Path, run_date: str, host: str, port: int) -> None:
         def log_message(self, format: str, *args: Any) -> None:
             log_progress(format % args)
 
-    server = HTTPServer((host, port), ReviewHandler)
-    log_progress(f"review server http://{host}:{port}/")
+    return ReviewHandler
+
+
+def serve_review(db_dir: Path, run_date: str, host: str, port: int, open_browser: bool = False) -> None:
+    state = load_review_state(db_dir, run_date)
+    server = ReusableHTTPServer((host, port), BaseHTTPRequestHandler)
+    actual_host, actual_port = server.server_address
+    url = f"http://{actual_host}:{actual_port}/"
+    html_body = render_review_html(run_date, state.get("items", []), base_url=url).encode("utf-8")
+    server.RequestHandlerClass = make_review_handler(db_dir, run_date, state, html_body)
+    log_progress(f"review server {url}")
+    if open_browser:
+        webbrowser.open(url)
     server.serve_forever()
 
 
@@ -1770,7 +1784,6 @@ def write_daily_report(
     review_items, remaining_review_items = build_review_items(db_dir, processed_results)
     state_path = write_review_state(db_dir, run_date, review_items)
     html_path = write_review_html(db_dir, run_date, review_items)
-    review_server_url = f"http://{DEFAULT_REVIEW_HOST}:{DEFAULT_REVIEW_PORT}/"
     lines = [
         "- [ ] read",
         "",
@@ -1785,7 +1798,7 @@ def write_daily_report(
         f"- Videos skipped: {len(skipped)}",
         f"- Videos failed: {len(failures)}",
         f"- Source-backed quote candidates: {sum(len(item['insights']) for item in processed_results)}",
-        f"- Review app: double-click `Review YouTube.command` or run `python3 scripts/youtube-monitor/review_app.py {run_date}`; it opens {review_server_url}",
+        f"- Review app: double-click `Review YouTube.command` or run `python3 scripts/youtube-monitor/review_app.py {run_date}`; it starts a fresh local server and opens the browser.",
         f"- CLI fallback: `scripts/youtube-monitor/run.sh --date {run_date} --feedback \"W1 up; W2 down <reason>\"`",
         f"- Static review preview: `{html_path.relative_to(db_dir)}`",
         f"- Review state: `{state_path.relative_to(db_dir)}`",

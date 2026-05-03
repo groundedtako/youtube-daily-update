@@ -341,6 +341,7 @@ Medium — useful if this is not already in your base rate.
             daily = daily_path.read_text(encoding="utf-8")
             self.assertIn("**W1**", daily)
             self.assertIn("Review app: double-click `Review YouTube.command`", daily)
+            self.assertIn("starts a fresh local server", daily)
             self.assertIn("python3 scripts/youtube-monitor/review_app.py 2026-05-02", daily)
             self.assertIn("`W1 up | W1 down <reason> | W1 known | W1 promote`", daily)
             state = json.loads((db_dir / "review" / "2026-05-02.json").read_text(encoding="utf-8"))

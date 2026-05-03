@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import argparse
 import sys
-import webbrowser
 from pathlib import Path
 
 import youtube_monitor as monitor
@@ -14,6 +13,7 @@ import youtube_monitor as monitor
 SCRIPT_DIR = Path(__file__).resolve().parent
 REPO_ROOT = SCRIPT_DIR.parents[1]
 DEFAULT_DB_DIR = REPO_ROOT / "youtube-db"
+DEFAULT_APP_PORT = 0
 
 
 def latest_review_date(db_dir: Path) -> str:
@@ -33,7 +33,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("date", nargs="?", help="Review date. Defaults to the latest youtube-db/review/YYYY-MM-DD.json file.")
     parser.add_argument("--db-dir", type=Path, default=DEFAULT_DB_DIR)
     parser.add_argument("--host", default=monitor.DEFAULT_REVIEW_HOST)
-    parser.add_argument("--port", type=int, default=monitor.DEFAULT_REVIEW_PORT)
+    parser.add_argument("--port", type=int, default=DEFAULT_APP_PORT, help="Port to bind. Defaults to 0, which auto-selects a free port.")
     parser.add_argument("--no-open", action="store_true", help="Start the server without opening a browser.")
     return parser.parse_args(argv)
 
@@ -41,13 +41,9 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv or sys.argv[1:])
     run_date = args.date or latest_review_date(args.db_dir)
-    url = f"http://{args.host}:{args.port}/"
-    if not args.no_open:
-        webbrowser.open(url)
-    print(f"YouTube review app: {url}")
     print(f"Review date: {run_date}")
     print("Press Ctrl+C to stop.")
-    monitor.serve_review(args.db_dir, run_date, args.host, args.port)
+    monitor.serve_review(args.db_dir, run_date, args.host, args.port, open_browser=not args.no_open)
     return 0
 
 

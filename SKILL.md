@@ -58,8 +58,8 @@ scripts/youtube-monitor/run.sh --lookback-count 3 --workers 5 --force
 
 For clickable feedback, prefer `Review YouTube.command` or
 `python3 scripts/youtube-monitor/review_app.py`. The app infers the latest
-review date, serves the page at `http://127.0.0.1:8765/`, opens the browser, and
-writes button clicks to `youtube-db/review/feedback.jsonl`.
+review date, starts a fresh local server on an available port, opens the
+browser, and writes button clicks to `youtube-db/review/feedback.jsonl`.
 Opening `youtube-db/review/YYYY-MM-DD.html` directly as `file://` is only a
 static preview. `--serve-review` remains available for automation/debugging.
 

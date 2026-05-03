@@ -144,7 +144,9 @@ python3 scripts/youtube-monitor/review_app.py
 ```
 
 On macOS, double-click `Review YouTube.command` from the repo root. The app
-infers the latest review date, starts the local server, and opens the browser.
+infers the latest review date, starts a fresh local server on an available
+port, and opens the browser. This avoids accidentally reusing a stale review
+server from a previous run.
 
 Review a specific date:
 
