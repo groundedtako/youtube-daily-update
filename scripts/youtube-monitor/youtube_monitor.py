@@ -1457,6 +1457,135 @@ def review_id(index: int) -> str:
     return f"W{index}"
 
 
+PREFERENCE_ACTION_WEIGHTS = {
+    "up": 2.0,
+    "down": -2.0,
+    "known": -1.5,
+}
+
+PREFERENCE_STOPWORDS = {
+    "about",
+    "after",
+    "again",
+    "already",
+    "because",
+    "being",
+    "between",
+    "could",
+    "from",
+    "have",
+    "into",
+    "like",
+    "more",
+    "that",
+    "the",
+    "their",
+    "this",
+    "through",
+    "what",
+    "when",
+    "where",
+    "which",
+    "while",
+    "with",
+    "would",
+    "your",
+}
+
+
+def preference_terms(*values: Any) -> set[str]:
+    terms: set[str] = set()
+    for value in values:
+        if isinstance(value, list):
+            terms.update(preference_terms(*value))
+            continue
+        text = str(value or "").casefold()
+        for token in re.findall(r"[a-z0-9][a-z0-9_+-]{2,}", text):
+            if token not in PREFERENCE_STOPWORDS:
+                terms.add(token)
+    return terms
+
+
+def load_feedback_records(db_dir: Path) -> list[dict[str, Any]]:
+    path = feedback_path(db_dir)
+    if not path.exists():
+        return []
+    records: list[dict[str, Any]] = []
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        try:
+            record = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if str(record.get("action", "")).casefold() in PREFERENCE_ACTION_WEIGHTS:
+            records.append(record)
+    return records
+
+
+def feedback_similarity(record: dict[str, Any], item: dict[str, Any]) -> tuple[float, list[str]]:
+    reasons: list[str] = []
+    similarity = 0.0
+
+    record_entities = {str(entity).casefold() for entity in record.get("entities", [])}
+    item_entities = {str(entity).casefold() for entity in item.get("entities", [])}
+    if record_entities and item_entities:
+        overlap = record_entities & item_entities
+        if overlap:
+            similarity += min(0.7, 0.25 * len(overlap))
+            reasons.append(f"entity:{','.join(sorted(overlap)[:3])}")
+
+    record_terms = preference_terms(
+        record.get("title"),
+        record.get("claim"),
+        record.get("core_take"),
+        record.get("decision_lens"),
+        record.get("reason_codes", []),
+    )
+    item_terms = preference_terms(
+        item.get("title"),
+        item.get("claim"),
+        item.get("core_take"),
+        item.get("decision_lens"),
+        item.get("key_insights", []),
+    )
+    if record_terms and item_terms:
+        overlap = record_terms & item_terms
+        if overlap:
+            jaccard = len(overlap) / len(record_terms | item_terms)
+            if jaccard >= 0.08:
+                similarity += min(0.75, jaccard * 3)
+                reasons.append(f"terms:{','.join(sorted(overlap)[:4])}")
+
+    if (
+        record.get("channel")
+        and item.get("channel")
+        and str(record["channel"]).casefold() == str(item["channel"]).casefold()
+    ):
+        similarity += 0.15
+        reasons.append("same_channel")
+
+    return min(similarity, 1.0), reasons
+
+
+def preference_adjustment(db_dir: Path, item: dict[str, Any]) -> tuple[float, list[str]]:
+    score = 0.0
+    reasons: list[str] = []
+    for record in load_feedback_records(db_dir):
+        similarity, matched_reasons = feedback_similarity(record, item)
+        if similarity <= 0:
+            continue
+        action = str(record.get("action", "")).casefold()
+        weight = PREFERENCE_ACTION_WEIGHTS[action]
+        contribution = weight * similarity
+        score += contribution
+        reason = f"{action}:{contribution:+.2f}"
+        if matched_reasons:
+            reason += f" ({'; '.join(matched_reasons[:2])})"
+        reasons.append(reason)
+    return round(score, 3), reasons[:5]
+
+
 def build_review_items(
     db_dir: Path,
     processed_results: list[dict[str, Any]],
@@ -1468,33 +1597,41 @@ def build_review_items(
         if result["insights"]
     ]
     review_items: list[dict[str, Any]] = []
-    for idx, (result, metadata, insight) in enumerate(promotion_items[:max_items], start=1):
+    for result, metadata, insight in promotion_items:
         output_dir = result["output_dir"]
         artifact_dir = str(output_dir.relative_to(db_dir)) if output_dir.is_relative_to(db_dir) else str(output_dir)
-        review_items.append(
-            {
-                "review_id": review_id(idx),
-                "video_id": metadata["video_id"],
-                "title": metadata["title"],
-                "channel": metadata["channel"],
-                "channel_handle": metadata.get("channel_handle", ""),
-                "source_url": metadata["source_url"],
-                "duration_seconds": metadata.get("duration_seconds", 0),
-                "artifact_dir": artifact_dir,
-                "entities": insight.get("mentioned_entities", []),
-                "core_take": concise_core_take(result.get("summary", ""), max_chars=320),
-                "decision_lens": decision_lens_summary(result.get("summary", ""), max_chars=420),
-                "key_insights": concise_summary_bullets(result.get("summary", ""), "Key Insights", max_items=3),
-                "quote_highlights": quote_highlights(result.get("insights", []), max_items=2),
-                "watch_worthiness": concise_summary_section(result.get("summary", ""), "Watch Worthiness", max_chars=220)
-                or "No watchworthiness score was generated for this artifact; future summaries include one.",
-                "claim": insight["claim"],
-                "timestamp": insight.get("timestamp", ""),
-                "timestamp_seconds": insight.get("timestamp_seconds"),
-                "insight_url": insight.get("url", metadata["source_url"]),
-                "feedback_hint": f"{review_id(idx)} up | {review_id(idx)} down <reason> | {review_id(idx)} known | {review_id(idx)} promote",
-            }
-        )
+        item = {
+            "review_id": "",
+            "video_id": metadata["video_id"],
+            "title": metadata["title"],
+            "channel": metadata["channel"],
+            "channel_handle": metadata.get("channel_handle", ""),
+            "source_url": metadata["source_url"],
+            "duration_seconds": metadata.get("duration_seconds", 0),
+            "artifact_dir": artifact_dir,
+            "entities": insight.get("mentioned_entities", []),
+            "core_take": concise_core_take(result.get("summary", ""), max_chars=320),
+            "decision_lens": decision_lens_summary(result.get("summary", ""), max_chars=420),
+            "key_insights": concise_summary_bullets(result.get("summary", ""), "Key Insights", max_items=3),
+            "quote_highlights": quote_highlights(result.get("insights", []), max_items=2),
+            "watch_worthiness": concise_summary_section(result.get("summary", ""), "Watch Worthiness", max_chars=220)
+            or "No watchworthiness score was generated for this artifact; future summaries include one.",
+            "claim": insight["claim"],
+            "timestamp": insight.get("timestamp", ""),
+            "timestamp_seconds": insight.get("timestamp_seconds"),
+            "insight_url": insight.get("url", metadata["source_url"]),
+            "base_signal_score": insight.get("score", 0),
+        }
+        preference_score, preference_reasons = preference_adjustment(db_dir, item)
+        item["preference_score"] = preference_score
+        item["preference_reasons"] = preference_reasons
+        item["review_sort_score"] = round(float(item["base_signal_score"]) + preference_score, 3)
+        review_items.append(item)
+    review_items.sort(key=lambda item: item["review_sort_score"], reverse=True)
+    review_items = review_items[:max_items]
+    for idx, item in enumerate(review_items, start=1):
+        item["review_id"] = review_id(idx)
+        item["feedback_hint"] = f"{review_id(idx)} up | {review_id(idx)} down <reason> | {review_id(idx)} known | {review_id(idx)} promote"
     return review_items, max(0, len(promotion_items) - max_items)
 
 
@@ -1569,6 +1706,10 @@ def append_feedback_records(db_dir: Path, run_date: str, records: list[dict[str,
                 "channel": item["channel"],
                 "source_url": item["source_url"],
                 "artifact_dir": item["artifact_dir"],
+                "entities": item.get("entities", []),
+                "claim": item.get("claim", ""),
+                "core_take": item.get("core_take", ""),
+                "decision_lens": item.get("decision_lens", ""),
             }
             handle.write(json.dumps(enriched, sort_keys=True) + "\n")
     return len(records)
@@ -1724,6 +1865,12 @@ def render_review_html(
         core_take = item.get("core_take") or "No core take available."
         relevance = item.get("decision_lens") or item.get("investment_relevance") or "No relevance assessment available."
         watch_worthiness = item.get("watch_worthiness") or "No watchworthiness assessment available."
+        preference_score = float(item.get("preference_score") or 0)
+        preference_badge = "Preference: neutral"
+        if preference_score >= 0.5:
+            preference_badge = f"Preference: boosted {preference_score:+.1f}"
+        elif preference_score <= -0.5:
+            preference_badge = f"Preference: downranked {preference_score:+.1f}"
         key_insights = item.get("key_insights") or []
         quote_items = item.get("quote_highlights") or []
         key_insights_html = "\n".join(f"<li>{html.escape(str(insight))}</li>" for insight in key_insights) or "<li>No extracted key insights available.</li>"
@@ -1736,7 +1883,7 @@ def render_review_html(
         item_cards.append(
             f"""
 <article class="card" data-review-id="{html.escape(item['review_id'])}">
-  <div class="meta">{html.escape(item['review_id'])} · {html.escape(item['channel'])} · {html.escape(entities)}</div>
+  <div class="meta">{html.escape(item['review_id'])} · {html.escape(item['channel'])} · {html.escape(entities)} · {html.escape(preference_badge)}</div>
   <h2>{html.escape(item['title'])}</h2>
   <section>
     <h3>Summary Judgment</h3>

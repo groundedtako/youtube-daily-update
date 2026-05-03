@@ -182,6 +182,7 @@ scripts/youtube-monitor/run.sh \
 - Quote extraction groups adjacent summary timestamps into coherent quote blocks.
 - Daily review cards get stable IDs such as `W1` and use a larger decision layout: summary judgment, highlighted opinion, key insights, key quotes, primary evidence, and feedback actions.
 - The review app opens a dashboard of unreviewed dates; submitting a date review records it in `youtube-db/review/reviewed_dates.json` and hides it from the dashboard.
+- Future review queues read `youtube-db/review/feedback.jsonl` and adjust ranking with lightweight similarity: `More like this` boosts similar items, while `Less like this` and `Already know this` downrank similar items. `Promote` remains a workflow action and does not boost similar content.
 - Review actions separate preference from workflow: `More like this`, `Less like this`, and `Already know this` tune future ranking; `Promote` means manual research follow-up.
 - Summaries are intentionally opinionated within transcript evidence: the default prompt asks what the video changes, confirms, or fails to change for an investor.
 - Failed transcript or summary attempts are recorded in the daily brief.

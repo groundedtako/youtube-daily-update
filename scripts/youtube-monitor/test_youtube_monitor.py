@@ -283,6 +283,100 @@ Medium — useful if this is not already in your base rate.
             ],
         )
 
+    def test_preference_feedback_downranks_similar_items(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            db_dir = Path(tmp)
+            stale_item = {
+                "title": "Indexing Advice For Beginners",
+                "channel": "Finance Channel",
+                "entities": ["SPY"],
+                "claim": "Index funds are best for most people.",
+                "core_take": "Basic indexing advice.",
+                "decision_lens": "Useful but saturated.",
+            }
+            fresh_item = {
+                "title": "Semiconductor Test Equipment Cycle",
+                "channel": "Chip Channel",
+                "entities": ["NVDA"],
+                "claim": "AI test intensity is rising.",
+                "core_take": "Specific semiconductor insight.",
+                "decision_lens": "Potentially actionable.",
+            }
+            ym.write_json(
+                db_dir / "review" / "2026-05-01.json",
+                {"items": [{**stale_item, "review_id": "W1", "video_id": "old", "source_url": "x", "artifact_dir": "a"}]},
+            )
+            ym.append_feedback_records(db_dir, "2026-05-01", [{"review_id": "W1", "action": "down", "reason_codes": ["indexing_saturated"], "raw_text": "W1 down indexing_saturated"}])
+
+            stale_score, stale_reasons = ym.preference_adjustment(db_dir, stale_item)
+            fresh_score, _ = ym.preference_adjustment(db_dir, fresh_item)
+
+            self.assertLess(stale_score, 0)
+            self.assertEqual(fresh_score, 0)
+            self.assertTrue(any(reason.startswith("down:") for reason in stale_reasons))
+
+    def test_build_review_items_sorts_by_preference_adjusted_score(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            db_dir = Path(tmp)
+            ym.write_json(
+                db_dir / "review" / "2026-05-01.json",
+                {
+                    "items": [
+                        {
+                            "review_id": "W1",
+                            "video_id": "old",
+                            "title": "Indexing Advice For Beginners",
+                            "channel": "Finance Channel",
+                            "source_url": "x",
+                            "artifact_dir": "a",
+                            "entities": ["SPY"],
+                            "claim": "Index funds are best.",
+                            "core_take": "Basic indexing advice.",
+                            "decision_lens": "Saturated.",
+                        }
+                    ]
+                },
+            )
+            ym.append_feedback_records(db_dir, "2026-05-01", [{"review_id": "W1", "action": "down", "reason_codes": ["indexing_saturated"], "raw_text": "W1 down"}])
+
+            def result(video_id: str, title: str, channel: str, claim: str) -> dict[str, object]:
+                return {
+                    "metadata": {
+                        "video_id": video_id,
+                        "title": title,
+                        "channel": channel,
+                        "channel_handle": channel,
+                        "source_url": f"https://example.com/{video_id}",
+                        "duration_seconds": 600,
+                        "entity_mentions": {"mapped": [], "unmapped_symbols": []},
+                    },
+                    "output_dir": db_dir / "videos" / video_id,
+                    "summary": f"## Core Take\n{claim}\n\n## Key Insights\n- {claim}",
+                    "insights": [
+                        {
+                            "claim": claim,
+                            "quote": claim,
+                            "timestamp": "1:00",
+                            "timestamp_seconds": 60,
+                            "url": f"https://example.com/{video_id}#t=60",
+                            "mentioned_entities": ["SPY"] if "Index" in title else ["NVDA"],
+                            "score": 1,
+                        }
+                    ],
+                }
+
+            items, _ = ym.build_review_items(
+                db_dir,
+                [
+                    result("stale", "Indexing Advice For Beginners", "Finance Channel", "Index funds are best for most people."),
+                    result("fresh", "Semiconductor Test Equipment Cycle", "Chip Channel", "AI test intensity is rising."),
+                ],
+                max_items=2,
+            )
+
+            self.assertEqual(items[0]["video_id"], "fresh")
+            self.assertLess(items[1]["preference_score"], 0)
+
     def test_parse_feedback_text_accepts_chat_commands(self) -> None:
         self.assertEqual(
             ym.parse_feedback_text("w1 down indexing_saturated\nW3 promote"),

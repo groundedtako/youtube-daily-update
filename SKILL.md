@@ -109,6 +109,12 @@ ranking. Interpret `promote` as a workflow action: the item deserves manual
 research follow-up or distribution consideration. Do not treat `up` as an
 instruction to promote.
 
+Future daily Review Queues should consume `youtube-db/review/feedback.jsonl`:
+`up` boosts similar items, `down` and `known` downrank similar items, and
+`promote` does not affect similarity ranking. Similarity is intentionally
+lightweight and content-level: entity overlap, title/claim/summary terms, and a
+small same-channel signal so one bad video does not blacklist a channel.
+
 Append feedback with `--feedback` or `--feedback-file`; do not rewrite historical briefs just to record feedback.
 
 For investing workflows, do not automatically write findings into `Stocks/`; keep promotion manual unless the user explicitly asks for distribution.
