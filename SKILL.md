@@ -14,6 +14,8 @@ technology, policy, academic, creator, or general knowledge monitoring.
 ## Entry Points
 
 - Main command: `scripts/youtube-monitor/run.sh`
+- One-click review launcher: `Review YouTube.command`
+- Review app launcher: `scripts/youtube-monitor/review_app.py`
 - Python implementation: `scripts/youtube-monitor/youtube_monitor.py`
 - Prompt template: `scripts/youtube-monitor/prompts/summary.md`
 - Channel config example: `youtube-db/config/channels.example.json`
@@ -46,16 +48,20 @@ If today's run is already completed, use `--refresh-report` instead of rerunning
 ```bash
 scripts/youtube-monitor/run.sh --lookback-count 3 --workers 5 --refresh-report
 scripts/youtube-monitor/run.sh --refresh-quotes
+python3 scripts/youtube-monitor/review_app.py
+python3 scripts/youtube-monitor/review_app.py YYYY-MM-DD
 scripts/youtube-monitor/run.sh --date YYYY-MM-DD --feedback "W1 down indexing_saturated; W3 promote"
 scripts/youtube-monitor/run.sh --date YYYY-MM-DD --serve-review
 scripts/youtube-monitor/run.sh --lookback-count 3 --workers 5 --dry-run
 scripts/youtube-monitor/run.sh --lookback-count 3 --workers 5 --force
 ```
 
-For clickable feedback, `--serve-review` is the lightweight GUI mode. It serves
-the review page at `http://127.0.0.1:8765/` and writes button clicks to
-`youtube-db/review/feedback.jsonl`. Opening `youtube-db/review/YYYY-MM-DD.html`
-directly as `file://` is only a static preview.
+For clickable feedback, prefer `Review YouTube.command` or
+`python3 scripts/youtube-monitor/review_app.py`. The app infers the latest
+review date, serves the page at `http://127.0.0.1:8765/`, opens the browser, and
+writes button clicks to `youtube-db/review/feedback.jsonl`.
+Opening `youtube-db/review/YYYY-MM-DD.html` directly as `file://` is only a
+static preview. `--serve-review` remains available for automation/debugging.
 
 When the skill is installed outside the target research repo, pass:
 
@@ -86,7 +92,7 @@ Read `youtube-db/daily/YYYY-MM-DD.md` after a run and report:
 - detected entity/topic matches, or stock-note matches for investing workflows
 - transcript failures
 - Review Queue highlights
-- review app command or served URL when feedback is expected
+- review app launcher path when feedback is expected
 - daily brief path
 
 When the user gives watchworthiness feedback, parse natural commands from the daily brief review IDs:

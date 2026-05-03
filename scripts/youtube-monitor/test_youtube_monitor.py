@@ -8,6 +8,7 @@ import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import youtube_monitor as ym
+import review_app
 
 
 class YouTubeMonitorTests(unittest.TestCase):
@@ -286,7 +287,8 @@ This is the useful daily brief sentence that should appear.
 
             daily = daily_path.read_text(encoding="utf-8")
             self.assertIn("**W1**", daily)
-            self.assertIn("Review app: run `scripts/youtube-monitor/run.sh --date 2026-05-02 --serve-review`", daily)
+            self.assertIn("Review app: double-click `Review YouTube.command`", daily)
+            self.assertIn("python3 scripts/youtube-monitor/review_app.py 2026-05-02", daily)
             self.assertIn("`W1 up | W1 down <reason> | W1 known | W1 promote`", daily)
             state = json.loads((db_dir / "review" / "2026-05-02.json").read_text(encoding="utf-8"))
             self.assertEqual(state["items"][0]["review_id"], "W1")
@@ -321,6 +323,14 @@ This is the useful daily brief sentence that should appear.
             self.assertEqual(record["action"], "down")
             self.assertEqual(record["reason_codes"], ["indexing_saturated"])
             self.assertEqual(record["video_id"], "abc")
+
+    def test_latest_review_date_uses_newest_review_state_file(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            db_dir = Path(tmp)
+            ym.write_json(db_dir / "review" / "2026-05-01.json", {"items": []})
+            ym.write_json(db_dir / "review" / "2026-05-03.json", {"items": []})
+
+            self.assertEqual(review_app.latest_review_date(db_dir), "2026-05-03")
 
 
 if __name__ == "__main__":

@@ -23,6 +23,7 @@ files, and writes local Markdown artifacts under `youtube-db/`.
 - `youtube-db/review/YYYY-MM-DD.json`: stable review IDs for feedback.
 - `youtube-db/review/YYYY-MM-DD.html`: optional local click-review page.
 - `youtube-db/review/feedback.jsonl`: appended watchworthiness feedback.
+- `Review YouTube.command`: macOS double-click launcher for the latest review queue.
 
 The routine does not write into `Stocks/`. Stock metadata is read only for alias
 matching when that folder exists.
@@ -136,15 +137,23 @@ Record natural feedback from the daily brief:
 scripts/youtube-monitor/run.sh --date 2026-05-02 --feedback "W1 down indexing_saturated; W3 promote"
 ```
 
-Use the optional local click UI:
+Review the latest daily queue with the lightweight GUI:
 
 ```bash
-scripts/youtube-monitor/run.sh --date 2026-05-02 --serve-review
+python3 scripts/youtube-monitor/review_app.py
 ```
 
-Then open `http://127.0.0.1:8765/`. The generated
-`youtube-db/review/YYYY-MM-DD.html` file is a static preview; button clicks only
-persist while the local review server is running.
+On macOS, double-click `Review YouTube.command` from the repo root. The app
+infers the latest review date, starts the local server, and opens the browser.
+
+Review a specific date:
+
+```bash
+python3 scripts/youtube-monitor/review_app.py 2026-05-02
+```
+
+The generated `youtube-db/review/YYYY-MM-DD.html` file is a static preview;
+button clicks only persist in the launched review app.
 
 Discovery-only dry run:
 
