@@ -149,6 +149,13 @@ class YouTubeMonitorTests(unittest.TestCase):
         )
         self.assertEqual(mentions["mapped"], [{"symbol": "AMZN", "matched_aliases": ["Amazon"]}])
 
+    def test_common_entity_aliases_detect_advantest_from_title(self) -> None:
+        mentions = ym.extract_entity_mentions(
+            "Advantest Is Up 450% — Here's What the Valuation Says Now",
+            ym.COMMON_ENTITY_ALIASES,
+        )
+        self.assertEqual(mentions["mapped"], [{"symbol": "ADVANTEST", "matched_aliases": ["Advantest"]}])
+
     def test_load_aliases_file_accepts_generic_entities(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "aliases.json"
@@ -406,6 +413,41 @@ Medium — useful if this is not already in your base rate.
 
             self.assertEqual(items[0]["video_id"], "fresh")
             self.assertLess(items[1]["preference_score"], 0)
+
+    def test_build_review_items_prefers_title_entities_for_display(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            db_dir = Path(tmp)
+            result = {
+                "metadata": {
+                    "video_id": "advantest",
+                    "title": "Advantest Is Up 450% — Here's What the Valuation Says Now",
+                    "channel": "Chip Stock Investor",
+                    "channel_handle": "@chipstockinvestor",
+                    "source_url": "https://example.com/advantest",
+                    "duration_seconds": 900,
+                    "title_entity_mentions": {"mapped": [{"symbol": "ADVANTEST", "matched_aliases": ["Advantest"]}], "unmapped_symbols": []},
+                    "entity_mentions": {"mapped": [{"symbol": "AMD", "matched_aliases": ["AMD"]}], "unmapped_symbols": []},
+                },
+                "output_dir": db_dir / "videos" / "advantest",
+                "summary": "## Core Take\nAdvantest is the valuation subject.\n\n## Key Insights\n- AMD and Nvidia are only customer context.",
+                "insights": [
+                    {
+                        "claim": "AMD and Nvidia are only customer context.",
+                        "quote": "AMD and Nvidia are customer context.",
+                        "timestamp": "1:00",
+                        "timestamp_seconds": 60,
+                        "url": "https://example.com/advantest#t=60",
+                        "mentioned_entities": ["AMD", "NVDA"],
+                        "score": 1,
+                    }
+                ],
+            }
+
+            items, _ = ym.build_review_items(db_dir, [result], max_items=1)
+
+            self.assertEqual(items[0]["entities"], ["ADVANTEST"])
+            self.assertEqual(items[0]["title_entities"], ["ADVANTEST"])
+            self.assertEqual(items[0]["all_entities"], ["AMD", "NVDA"])
 
     def test_parse_feedback_text_accepts_chat_commands(self) -> None:
         self.assertEqual(

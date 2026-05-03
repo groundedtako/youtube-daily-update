@@ -43,6 +43,7 @@ DEFAULT_REVIEW_PORT = 8765
 COMMON_ENTITY_ALIASES = {
     "AAPL": ["Apple"],
     "AMZN": ["Amazon"],
+    "ADVANTEST": ["Advantest"],
     "GOOGL": ["Alphabet", "Google"],
     "META": ["Meta", "Facebook"],
     "MSFT": ["Microsoft"],
@@ -445,6 +446,7 @@ def load_result_from_artifact(
     except (OSError, json.JSONDecodeError):
         return None
 
+    metadata["title_entity_mentions"] = extract_entity_mentions(str(metadata.get("title") or ""), stock_aliases)
     mention_text_parts: list[str] = [str(metadata.get("title") or ""), str(metadata.get("channel") or ""), summary]
     transcript_file = metadata.get("transcript_file")
     if transcript_file:
@@ -1292,6 +1294,7 @@ def process_video(
     summary_path = out_dir / "summary.md"
     summary = ""
     insights: list[dict[str, Any]] = []
+    title_entity_mentions = extract_entity_mentions(video.title, stock_aliases)
     entity_mentions: dict[str, Any] = {"mapped": [], "unmapped_symbols": []}
     if transcript_status != "missing":
         if stage_callback:
@@ -1322,6 +1325,7 @@ def process_video(
         "source_url": video.url,
         "duration_seconds": video.duration_seconds,
         "duration": format_duration(video.duration_seconds),
+        "title_entity_mentions": title_entity_mentions,
         "entity_mentions": entity_mentions,
         "transcript_status": transcript_status,
         "raw_vtt": vtt_path.name if vtt_path else None,
@@ -1566,8 +1570,22 @@ def feedback_similarity(record: dict[str, Any], item: dict[str, Any]) -> tuple[f
     reasons: list[str] = []
     similarity = 0.0
 
-    record_entities = {str(entity).casefold() for entity in record.get("entities", [])}
-    item_entities = {str(entity).casefold() for entity in item.get("entities", [])}
+    record_entities = {
+        str(entity).casefold()
+        for entity in [
+            *(record.get("entities") or []),
+            *(record.get("all_entities") or []),
+            *(record.get("title_entities") or []),
+        ]
+    }
+    item_entities = {
+        str(entity).casefold()
+        for entity in [
+            *(item.get("entities") or []),
+            *(item.get("all_entities") or []),
+            *(item.get("title_entities") or []),
+        ]
+    }
     if record_entities and item_entities:
         overlap = record_entities & item_entities
         if overlap:
@@ -1639,6 +1657,9 @@ def build_review_items(
     for result, metadata, insight in promotion_items:
         output_dir = result["output_dir"]
         artifact_dir = str(output_dir.relative_to(db_dir)) if output_dir.is_relative_to(db_dir) else str(output_dir)
+        title_entities = mentioned_symbols(metadata.get("title_entity_mentions", {}))
+        all_entities = insight.get("mentioned_entities", [])
+        display_entities = title_entities or all_entities
         item = {
             "review_id": "",
             "video_id": metadata["video_id"],
@@ -1648,7 +1669,9 @@ def build_review_items(
             "source_url": metadata["source_url"],
             "duration_seconds": metadata.get("duration_seconds", 0),
             "artifact_dir": artifact_dir,
-            "entities": insight.get("mentioned_entities", []),
+            "entities": display_entities,
+            "title_entities": title_entities,
+            "all_entities": all_entities,
             "core_take": concise_core_take(result.get("summary", ""), max_chars=None),
             "decision_lens": decision_lens_summary(result.get("summary", ""), max_chars=None),
             "key_insights": concise_summary_bullets(result.get("summary", ""), "Key Insights", max_items=4, max_chars=None),
@@ -1746,6 +1769,8 @@ def append_feedback_records(db_dir: Path, run_date: str, records: list[dict[str,
                 "source_url": item["source_url"],
                 "artifact_dir": item["artifact_dir"],
                 "entities": item.get("entities", []),
+                "title_entities": item.get("title_entities", []),
+                "all_entities": item.get("all_entities", []),
                 "claim": item.get("claim", ""),
                 "core_take": item.get("core_take", ""),
                 "decision_lens": item.get("decision_lens", ""),
