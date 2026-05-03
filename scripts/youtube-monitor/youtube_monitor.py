@@ -1368,6 +1368,30 @@ def concise_core_take(summary: str, max_chars: int = 180) -> str:
     return text[: max_chars - 1].rstrip() + "..."
 
 
+def concise_summary_section(summary: str, heading: str, max_chars: int = 360) -> str:
+    lines = extract_summary_section(summary, heading)
+    text = strip_inline_markdown(" ".join(lines))
+    if not text:
+        return ""
+    if len(text) <= max_chars:
+        return text
+    return text[: max_chars - 1].rstrip() + "..."
+
+
+def decision_lens_summary(summary: str, max_chars: int = 420) -> str:
+    for heading in (
+        "Investment Relevance",
+        "Research Relevance",
+        "Product Relevance",
+        "Policy Relevance",
+        "Learning Relevance",
+    ):
+        text = concise_summary_section(summary, heading, max_chars=max_chars)
+        if text:
+            return text
+    return "No separate decision-lens section was generated for this artifact; use the judgment and evidence sections."
+
+
 def compact_artifact_links(rel_dir: Path, transcript_file: str | None) -> str:
     return (
         f"[summary](../{rel_dir}/summary.md) · "
@@ -1420,6 +1444,10 @@ def build_review_items(
                 "duration_seconds": metadata.get("duration_seconds", 0),
                 "artifact_dir": artifact_dir,
                 "entities": insight.get("mentioned_entities", []),
+                "core_take": concise_core_take(result.get("summary", ""), max_chars=320),
+                "decision_lens": decision_lens_summary(result.get("summary", ""), max_chars=420),
+                "watch_worthiness": concise_summary_section(result.get("summary", ""), "Watch Worthiness", max_chars=220)
+                or "No watchworthiness score was generated for this artifact; future summaries include one.",
                 "claim": insight["claim"],
                 "timestamp": insight.get("timestamp", ""),
                 "timestamp_seconds": insight.get("timestamp_seconds"),
@@ -1514,19 +1542,37 @@ def render_review_html(run_date: str, items: list[dict[str, Any]]) -> str:
     item_cards = []
     for item in items:
         entities = ", ".join(item.get("entities", [])) or "No entity detected"
+        core_take = item.get("core_take") or "No core take available."
+        relevance = item.get("decision_lens") or item.get("investment_relevance") or "No relevance assessment available."
+        watch_worthiness = item.get("watch_worthiness") or "No watchworthiness assessment available."
         item_cards.append(
             f"""
 <article class="card" data-review-id="{html.escape(item['review_id'])}">
   <div class="meta">{html.escape(item['review_id'])} · {html.escape(item['channel'])} · {html.escape(entities)}</div>
   <h2>{html.escape(item['title'])}</h2>
-  <p>{html.escape(item['claim'])}</p>
+  <section>
+    <h3>Judgment</h3>
+    <p>{html.escape(core_take)}</p>
+  </section>
+  <section>
+    <h3>Why It Matters</h3>
+    <p>{html.escape(relevance)}</p>
+  </section>
+  <section>
+    <h3>Evidence</h3>
+    <p>{html.escape(item['claim'])}</p>
+  </section>
+  <section>
+    <h3>Watchworthiness</h3>
+    <p>{html.escape(watch_worthiness)}</p>
+  </section>
   <p><a href="{html.escape(item['insight_url'])}">Open source @ {html.escape(item.get('timestamp', 'start'))}</a></p>
   <input aria-label="reason" placeholder="optional reason, e.g. indexing_saturated" />
   <div class="actions">
-    <button data-action="up">👍 More like this</button>
-    <button data-action="down">👎 Less like this</button>
-    <button data-action="known">💤 Already know this</button>
-    <button data-action="promote">🎯 Promote</button>
+    <button data-action="up" title="Preference signal: rank similar videos higher in future briefs.">👍 More like this</button>
+    <button data-action="down" title="Preference signal: rank similar videos lower in future briefs.">👎 Less like this</button>
+    <button data-action="known" title="Preference signal: useful topic, but already saturated for you.">💤 Already know this</button>
+    <button data-action="promote" title="Workflow action: move this item into manual research/follow-up.">🎯 Promote</button>
   </div>
   <div class="status"></div>
 </article>
@@ -1546,6 +1592,8 @@ def render_review_html(run_date: str, items: list[dict[str, Any]]) -> str:
     .meta {{ color: #aaa; font-size: 14px; }}
     h1 {{ margin-bottom: 4px; }}
     h2 {{ font-size: 20px; margin: 8px 0; }}
+    h3 {{ color: #bbb; font-size: 13px; letter-spacing: .08em; margin: 18px 0 4px; text-transform: uppercase; }}
+    section p {{ margin: 0; }}
     a {{ color: #8ab4ff; }}
     input {{ box-sizing: border-box; width: 100%; padding: 10px; margin: 8px 0 12px; border-radius: 10px; border: 1px solid #555; background: #111; color: #fff; }}
     button {{ margin: 4px 8px 4px 0; padding: 10px 12px; border-radius: 999px; border: 1px solid #444; background: #2a2a2a; color: #fff; cursor: pointer; }}
@@ -1558,6 +1606,7 @@ def render_review_html(run_date: str, items: list[dict[str, Any]]) -> str:
   <h1>YouTube Review — {html.escape(run_date)}</h1>
   <p><strong>Persistence:</strong> buttons save only when this page is opened from the local review server at <code>http://127.0.0.1:8765/</code>. A <code>file://</code> tab is a static preview.</p>
   <p>Start the app with <code>scripts/youtube-monitor/run.sh --date {html.escape(run_date)} --serve-review</code>. Chat fallback works with commands like <code>W1 down indexing_saturated</code>.</p>
+  <p><strong>Actions:</strong> <em>More/Less/Known</em> are ranking-preference signals for future briefs. <em>Promote</em> is an explicit workflow action: this deserves manual research follow-up, not merely more similar videos.</p>
   {cards}
 </main>
 <script>

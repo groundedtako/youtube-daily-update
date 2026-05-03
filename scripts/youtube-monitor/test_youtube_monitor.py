@@ -236,6 +236,27 @@ This is the useful daily brief sentence that should appear.
             "This is the useful daily brief sentence that should appear.",
         )
 
+    def test_concise_summary_section_extracts_relevance(self) -> None:
+        summary = """## Core Take
+Useful but saturated.
+
+## Investment Relevance
+This is investable because it separates durable business quality from stale market timing.
+
+## Watch Worthiness
+Medium — useful if this is not already in your base rate.
+"""
+        self.assertEqual(
+            ym.concise_summary_section(summary, "Investment Relevance"),
+            "This is investable because it separates durable business quality from stale market timing.",
+        )
+
+    def test_decision_lens_summary_falls_back_when_missing(self) -> None:
+        self.assertIn(
+            "No separate decision-lens section",
+            ym.decision_lens_summary("## Core Take\nUseful judgment."),
+        )
+
     def test_parse_feedback_text_accepts_chat_commands(self) -> None:
         self.assertEqual(
             ym.parse_feedback_text("w1 down indexing_saturated\nW3 promote"),
@@ -271,7 +292,11 @@ This is the useful daily brief sentence that should appear.
                     "transcript_file": "transcript.clean.md",
                 },
                 "output_dir": artifact_dir,
-                "summary": "## Core Take\nUseful but saturated indexing advice.",
+                "summary": (
+                    "## Core Take\nUseful but saturated indexing advice.\n\n"
+                    "## Investment Relevance\nThe opinion is sensible but does not change the investing action if indexing is already familiar.\n\n"
+                    "## Watch Worthiness\nMedium — good primer, low novelty."
+                ),
                 "insights": [
                     {
                         "claim": "Index funds beat many active managers.",
@@ -292,8 +317,12 @@ This is the useful daily brief sentence that should appear.
             self.assertIn("`W1 up | W1 down <reason> | W1 known | W1 promote`", daily)
             state = json.loads((db_dir / "review" / "2026-05-02.json").read_text(encoding="utf-8"))
             self.assertEqual(state["items"][0]["review_id"], "W1")
+            self.assertEqual(state["items"][0]["core_take"], "Useful but saturated indexing advice.")
+            self.assertIn("does not change", state["items"][0]["decision_lens"])
             html = (db_dir / "review" / "2026-05-02.html").read_text(encoding="utf-8")
             self.assertIn("More like this", html)
+            self.assertIn("Workflow action", html)
+            self.assertIn("Why It Matters", html)
             self.assertIn("file://", html)
 
     def test_apply_feedback_text_enriches_jsonl_record(self) -> None:

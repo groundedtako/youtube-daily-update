@@ -179,6 +179,8 @@ scripts/youtube-monitor/run.sh \
 - Interrupted runs resume pending or failed manifest items.
 - Quote extraction groups adjacent summary timestamps into coherent quote blocks.
 - Daily review items get stable IDs such as `W1`; feedback can be appended by chat-style command or by the local review UI.
+- Review actions separate preference from workflow: `More like this`, `Less like this`, and `Already know this` tune future ranking; `Promote` means manual research follow-up.
+- Summaries are intentionally opinionated within transcript evidence: the default prompt asks what the video changes, confirms, or fails to change for an investor.
 - Failed transcript or summary attempts are recorded in the daily brief.
 
 ## Codex Skill

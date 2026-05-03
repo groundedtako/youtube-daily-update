@@ -102,6 +102,11 @@ When the user gives watchworthiness feedback, parse natural commands from the da
 - `W1 known`: already-known or saturated for the user
 - `W1 promote`: promote to research/manual follow-up queue
 
+Interpret `up`, `down`, and `known` as preference-learning signals for future
+ranking. Interpret `promote` as a workflow action: the item deserves manual
+research follow-up or distribution consideration. Do not treat `up` as an
+instruction to promote.
+
 Append feedback with `--feedback` or `--feedback-file`; do not rewrite historical briefs just to record feedback.
 
 For investing workflows, do not automatically write findings into `Stocks/`; keep promotion manual unless the user explicitly asks for distribution.
@@ -110,6 +115,8 @@ For investing workflows, do not automatically write findings into `Stocks/`; kee
 
 - The monitor skips videos shorter than 3 minutes.
 - The monitor writes review state, review HTML, and feedback JSONL under `youtube-db/review/`.
+- Review cards should show judgment, why it matters, evidence, and watchworthiness; avoid fact-only cards for investment content.
+- The summary prompt should be opinionated while remaining transcript-grounded: state what the video changes, confirms, or fails to change for the decision lens.
 - The monitor reads `youtube-db/config/aliases.json` for generic matching and `Stocks/*/meta.json` only for optional investing alias matching.
 - The monitor should not depend on other local skills.
 - Run `python3 scripts/youtube-monitor/test_youtube_monitor.py` after code changes.
